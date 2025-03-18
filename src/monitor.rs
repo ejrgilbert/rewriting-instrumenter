@@ -3,7 +3,9 @@ mod cache;
 
 use std::io::Error;
 use std::path::{Path, PathBuf};
-use orca_wasm::Module;
+use orca_wasm::ir::id::GlobalID;
+use orca_wasm::ir::types::{InitExpr, Value};
+use orca_wasm::{DataType, Instructions, Module};
 
 pub enum Monitor {
     IMix,
@@ -42,4 +44,14 @@ fn write_module(mut module: Module, monitor_name: &str, path: &Path) -> Result<(
     let new_file_name = PathBuf::from(format!("{}.{}", new_file_stem, extension));
 
     module.emit_wasm(new_file_name.to_str().unwrap())
+}
+
+
+pub fn add_global(wasm: &mut Module) -> GlobalID {
+    wasm.add_global(
+        InitExpr::new(vec![Instructions::Value(Value::I32(0))]),
+        DataType::I32,
+        true,
+        false,
+    )
 }

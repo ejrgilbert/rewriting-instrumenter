@@ -4,6 +4,7 @@ use orca_wasm::ir::id::GlobalID;
 use orca_wasm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
 use orca_wasm::iterator::module_iterator::ModuleIterator;
 use wasmparser::Operator;
+use crate::monitor::add_global;
 
 struct Globals {
     _const: GlobalID,
@@ -437,13 +438,4 @@ fn count_gc(wasm: &mut ModuleIterator, globals: &Globals) {
 }
 fn count_atomic(wasm: &mut ModuleIterator, globals: &Globals) {
     count(wasm, globals.atomic);
-}
-
-fn add_global(wasm: &mut Module) -> GlobalID {
-    wasm.add_global(
-        InitExpr::new(vec![Instructions::Value(Value::I32(0))]),
-        DataType::I32,
-        true,
-        false,
-    )
 }
