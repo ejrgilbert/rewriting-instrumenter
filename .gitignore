@@ -1,5 +1,6 @@
 # Instrumented wasm modules
 *.wasm
+*.wat
 
 # IntelliJ configuration
 .idea/

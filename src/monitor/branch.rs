@@ -30,27 +30,30 @@ pub fn instrument(mut wasm: Module) -> Module {
 }
 
 fn flush(memory: &mut MemTracker, wasm: &mut Module) {
-    let host_funcs = add_imports(wasm);
-    let flush_fn = emit_flush_fn(memory, &host_funcs, wasm);
+    let utils = add_util_funcs(memory, wasm);
+    let flush_fn = emit_flush_fn(memory, &utils, wasm);
     call_flush_on_exit(flush_fn, wasm)
 }
 
-fn add_imports(wasm: &mut Module) -> HashMap<String, FunctionID> {
-    let host_funcs = [("wizeng", "puti", vec![I32], vec![]), ("wizeng", "puts", vec![I32, I32], vec![])];
+fn add_util_funcs(memory: &mut MemTracker, wasm: &mut Module) -> HashMap<String, FunctionID> {
+    let host_funcs = [("whamm_core", "puti32", vec![I32], vec![]), ("whamm_core", "putc", vec![I32], vec![])];
 
-    let mut imports = HashMap::new();
+    let mut utils = HashMap::new();
     for (module, name, params, results) in host_funcs.iter() {
         let ty_id = wasm.types.add_func_type(params, results);
         let (fid, imp_id) = wasm.add_import_func(module.to_string(), name.to_string(), ty_id);
         wasm.imports.set_name(name.to_string(), imp_id);
 
-        imports.insert(name.to_string(), fid);
+        utils.insert(name.to_string(), fid);
     }
 
-    imports
+    let puts_fid = emit_puts(memory, &utils, wasm);
+    utils.insert("puts".to_string(), puts_fid);
+
+    utils
 }
 
-fn emit_flush_fn(memory: &mut MemTracker, host_funcs: &HashMap<String, FunctionID>, wasm: &mut Module) -> FunctionID {
+fn emit_flush_fn(memory: &mut MemTracker, utils: &HashMap<String, FunctionID>, wasm: &mut Module) -> FunctionID {
     let mut flush = FunctionBuilder::new(&[], &[]);
 
     // create locals
@@ -64,11 +67,11 @@ fn emit_flush_fn(memory: &mut MemTracker, host_funcs: &HashMap<String, FunctionI
         memory: memory.mem_id,
     };
 
-    let Some(puts) = host_funcs.get("puts") else {
+    let Some(puts) = utils.get("puts") else {
         panic!("could not find puts hostfunc")
     };
     let puts = *puts;
-    let Some(puti) = host_funcs.get("puti") else {
+    let Some(puti) = utils.get("puti32") else {
         panic!("could not find puti hostfunc")
     };
     let puti = *puti;
@@ -174,6 +177,56 @@ fn emit_flush_fn(memory: &mut MemTracker, host_funcs: &HashMap<String, FunctionI
     wasm.set_fn_name(flush_id, "flush_on_exit".to_string());
 
     flush_id
+}
+
+fn emit_puts(memory: &mut MemTracker, utils: &HashMap<String, FunctionID>, wasm: &mut Module) -> FunctionID {
+    let start_addr = LocalID(0);
+    let len = LocalID(1);
+    let mut puts = FunctionBuilder::new(&[I32, I32], &[]);
+
+    let i = puts.add_local(I32);
+    let Some(putc) = utils.get("putc") else {
+        panic!("Couldn't find function for 'putc'");
+    };
+    let putc = *putc;
+
+    #[rustfmt::skip]
+    puts.loop_stmt(BlockType::Empty)
+        // Check if we've reached the end of the string
+        .local_get(i)
+        .local_get(len)
+        .i32_lt_unsigned()
+        .i32_eqz()
+        .br_if(1)
+
+        // get next char
+        .local_get(start_addr)
+        .local_get(i)
+        .i32_add()
+        // load a byte from memory
+        .i32_load8_u(
+            wasmparser::MemArg {
+                align: 0,
+                max_align: 0,
+                offset: 0,
+                memory: memory.mem_id
+            }
+        );
+
+    puts.call(putc);
+
+    // Increment i and continue loop
+    puts.local_get(i)
+        .i32_const(1)
+        .i32_add()
+        .local_set(i)
+        .br(0) // (;3;)
+        .end();
+
+    let puts_fid = puts.finish_module(wasm);
+    wasm.set_fn_name(puts_fid, "puts".to_string());
+
+    puts_fid
 }
 
 fn call_flush_on_exit(flush_fn: FunctionID, wasm: &mut Module) {
