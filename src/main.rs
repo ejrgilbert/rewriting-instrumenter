@@ -19,6 +19,7 @@ fn main() -> Result<(), anyhow::Error> {
         "imix" => Monitor::IMix,
         "cache" => Monitor::Cache,
         "branch" => Monitor::Branch,
+        "hotness" => Monitor::Hotness,
         name => bail!("Invalid monitor {}", name),
     };
 

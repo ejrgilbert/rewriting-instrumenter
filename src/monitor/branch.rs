@@ -10,9 +10,8 @@ use orca_wasm::module_builder::AddLocal;
 use orca_wasm::opcode::MacroOpcode;
 use wasmparser::{MemArg, Operator};
 use crate::monitor::branch::Case::{NoMatch, SimpleBranch, Table};
-use crate::monitor::{add_util_funcs, AllocatedVar, call_flush_on_exit, LocalsTracker, MemTracker};
+use crate::monitor::{add_util_funcs, call_flush_on_exit, LocalsTracker, MemTracker, MultiCountHeader};
 
-pub const WASM_PAGE_SIZE: u32 = 65_536;
 
 pub fn instrument(mut wasm: Module) -> Module {
     let mut locals = LocalsTracker::default();
@@ -241,8 +240,8 @@ fn simple_branch_probe(fid: u32, pc: u32, wasm: &mut ModuleIterator, locals: &mu
         // Load the memory offset
         .u32_const(alloc_at)
         // calculate location of the in-memory value we want to increment
-        .u32_const((AllocatedVar::full_header_size() + size_of::<u64>()) as u32)
-        .u32_const(AllocatedVar::full_header_size() as u32)
+        .u32_const((MultiCountHeader::num_bytes() + size_of::<u64>()) as u32)
+        .u32_const(MultiCountHeader::num_bytes() as u32)
         .local_get(arg0)
         .select()
         .i32_add()
@@ -279,7 +278,7 @@ fn br_table_probe(fid: u32, pc: u32, num_targets: u32, wasm: &mut ModuleIterator
         .i32_load(MemArg {
             align: 0,
             max_align: 0,
-            offset: AllocatedVar::loc_header_size() as u64,
+            offset: MultiCountHeader::loc_header_size() as u64,
             memory: memory.mem_id,
         })
         .i32_const(1)
@@ -311,7 +310,7 @@ fn br_table_probe(fid: u32, pc: u32, num_targets: u32, wasm: &mut ModuleIterator
         .i64_load(MemArg {
             align: 0,
             max_align: 0,
-            offset: AllocatedVar::full_header_size() as u64,
+            offset: MultiCountHeader::num_bytes() as u64,
             memory: memory.mem_id,
         })
         .i64_const(1)
@@ -319,7 +318,7 @@ fn br_table_probe(fid: u32, pc: u32, num_targets: u32, wasm: &mut ModuleIterator
         .i64_store(MemArg {
             align: 0,
             max_align: 0,
-            offset: AllocatedVar::full_header_size() as u64,
+            offset: MultiCountHeader::num_bytes() as u64,
             memory: memory.mem_id,
         });
 
@@ -327,11 +326,11 @@ fn br_table_probe(fid: u32, pc: u32, num_targets: u32, wasm: &mut ModuleIterator
 }
 
 fn alloc_branch(fid: u32, pc: u32, memory: &mut MemTracker) -> u32 {
-    memory.alloc_var(fid, pc, 2)
+    memory.alloc_multicount_var(fid, pc, 2)
 }
 
 fn alloc_br_table(num_targets: u32, fid: u32, pc: u32, memory: &mut MemTracker) -> u32 {
-    memory.alloc_var(fid, pc, num_targets)
+    memory.alloc_multicount_var(fid, pc, num_targets)
 }
 
 /// Returns values in the order that they should be replaced on the stack!

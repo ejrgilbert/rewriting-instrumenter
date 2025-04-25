@@ -1,6 +1,7 @@
 mod imix;
 mod cache;
 mod branch;
+mod hotness;
 
 use std::collections::{HashMap, HashSet};
 use std::io::Error;
@@ -16,12 +17,14 @@ use orca_wasm::iterator::module_iterator::ModuleIterator;
 use orca_wasm::module_builder::AddLocal;
 use orca_wasm::opcode::Instrumenter;
 use wasmparser::{MemArg, MemoryType, Operator};
-use crate::monitor::branch::WASM_PAGE_SIZE;
+
+pub const WASM_PAGE_SIZE: u32 = 65_536;
 
 pub enum Monitor {
     IMix,
     Cache,
-    Branch
+    Branch,
+    Hotness
 }
 
 impl Monitor {
@@ -29,7 +32,8 @@ impl Monitor {
         match self {
             Monitor::IMix => "imix",
             Monitor::Cache => "cache",
-            Monitor::Branch => "branch"
+            Monitor::Branch => "branch",
+            Monitor::Hotness => "hotness"
         }
     }
 }
@@ -41,6 +45,7 @@ pub fn add_monitor(module: Module, monitor: Monitor, path: &Path) -> Result<(), 
         Monitor::IMix => imix::instrument(module),
         Monitor::Cache => cache::instrument(module),
         Monitor::Branch => branch::instrument(module),
+        Monitor::Hotness => hotness::instrument(module)
     };
 
     write_module(instrumented_module, monitor.name(), path)
@@ -170,12 +175,28 @@ impl MemTracker {
             panic!("couldn't find string: {str}")
         }
     }
-    pub fn alloc_var(&mut self, fid: u32, pc: u32, n: u32) -> u32 {
+    pub fn alloc_multicount_var(&mut self, fid: u32, pc: u32, n: u32) -> u32 {
         let mem_offset = self.curr_mem_offset;
-        let allocated_var = AllocatedVar {
-            fid,
-            pc,
-            n
+        let allocated_var = AllocatedVar::MultiCount {
+            header: MultiCountHeader {
+                fid,
+                pc,
+                n
+            }
+        };
+
+        let len = allocated_var.num_bytes() as u32;
+        self.allocated_vars.push(allocated_var);
+        self.curr_mem_offset += len;
+        mem_offset
+    }
+    pub fn alloc_count_var(&mut self, fid: u32, pc: u32) -> u32 {
+        let mem_offset = self.curr_mem_offset;
+        let allocated_var = AllocatedVar::SingleCount {
+            header: SingleCountHeader {
+                fid,
+                pc
+            }
         };
 
         let len = allocated_var.num_bytes() as u32;
@@ -193,39 +214,101 @@ impl MemTracker {
         // (size already accounted for in self.curr_mem_offset)
     }
 }
-struct AllocatedVar {
+
+struct SingleCountHeader {
+    fid: u32,
+    pc: u32
+}
+impl SingleCountHeader {
+    fn num_bytes() -> usize {
+        // 0      4      8
+        // | fid  |  pc  |
+        size_of::<u32>() +
+            size_of::<u32>()
+    }
+    pub fn encode(&self) -> Vec<u8> {
+        let mut res = self.fid.to_le_bytes().to_vec();
+        res.extend(self.pc.to_le_bytes());
+        assert_eq!(Self::num_bytes(), res.len());
+
+        res
+    }
+}
+
+struct MultiCountHeader {
     fid: u32,
     pc: u32,
     // n is the number of entries in the table including the default target
-    n: u32,
+    n: u32
 }
-impl AllocatedVar {
+impl MultiCountHeader {
+    fn num_bytes() -> usize {
+        // 0      4      8      12        20
+        // | fid  |  pc  |   n  |  0 taken |   ...  | n taken |
+        Self::loc_header_size() +
+            size_of::<u32>()
+    }
+    pub fn loc_header_size() -> usize {
+        size_of::<u32>() +
+            size_of::<u32>()
+    }
+
     pub fn encode(&self) -> Vec<u8> {
         let mut res = self.fid.to_le_bytes().to_vec();
         res.extend(self.pc.to_le_bytes());
         res.extend(self.n.to_le_bytes());
-
-        // zero padding for value slots based on N
-        for _ in 0..self.n {
-            res.extend(0_i64.to_le_bytes());
-        }
-        assert_eq!(self.num_bytes(), res.len());
+        assert_eq!(Self::num_bytes(), res.len());
 
         res
     }
+}
+
+enum AllocatedVar {
+    // 0      4      8      16
+    // | fid  |  pc  | count |
+    SingleCount {
+        header: SingleCountHeader
+    },
+    // 0      4      8      12        20
+    // | fid  |  pc  |   n  |  0 taken |   ...  | n taken |
+    MultiCount {
+        header: MultiCountHeader
+    }
+}
+impl AllocatedVar {
+    pub fn encode(&self) -> Vec<u8> {
+        match self {
+            Self::SingleCount {header} => {
+                let mut res = header.encode();
+                // zero padding for single value slot
+                res.extend(0_i64.to_le_bytes());
+                assert_eq!(self.num_bytes(), res.len());
+
+                res
+            },
+            Self::MultiCount {header} => {
+                let mut res = header.encode();
+                // zero padding for value slots based on N
+                for _ in 0..header.n {
+                    res.extend(0_i64.to_le_bytes());
+                }
+                assert_eq!(self.num_bytes(), res.len());
+
+                res
+            },
+        }
+    }
     fn num_bytes(&self) -> usize {
-        // 0      4      8      12        20
-        // | fid  |  pc  |   n  |  0 taken |   ...  | n taken |
-        Self::full_header_size() +
-            (self.n as usize * size_of::<u64>())
+        match self {
+            AllocatedVar::SingleCount {..} => self.full_header_size() + size_of::<u64>(),
+            AllocatedVar::MultiCount {header: MultiCountHeader {n, ..}} => self.full_header_size() + (*n as usize * size_of::<u64>()),
+        }
     }
-    fn loc_header_size() -> usize {
-        size_of::<u32>() +
-            size_of::<u32>()
-    }
-    fn full_header_size() -> usize {
-        Self::loc_header_size() +
-            size_of::<u32>()
+    pub fn full_header_size(&self) -> usize {
+        match self {
+            AllocatedVar::SingleCount {..} => SingleCountHeader::num_bytes(),
+            AllocatedVar::MultiCount {..} => MultiCountHeader::num_bytes()
+        }
     }
 }
 fn setup_strings(to_emit: Vec<String>, mem_id: u32, wasm: &mut Module) -> (HashMap<String, u32>, u32) {
