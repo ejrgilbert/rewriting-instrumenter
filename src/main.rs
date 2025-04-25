@@ -17,8 +17,8 @@ fn main() -> Result<(), anyhow::Error> {
 
     let monitor: Monitor = match &args[0][..] {
         "imix" => Monitor::IMix,
-        "cache" => Monitor::Cache,
-        "branch" => Monitor::Branch,
+        "cache-sim" => Monitor::Cache,
+        "branches" => Monitor::Branch,
         "hotness" => Monitor::Hotness,
         name => bail!("Invalid monitor {}", name),
     };

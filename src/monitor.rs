@@ -31,8 +31,8 @@ impl Monitor {
     fn name(&self) -> &str {
         match self {
             Monitor::IMix => "imix",
-            Monitor::Cache => "cache",
-            Monitor::Branch => "branch",
+            Monitor::Cache => "cache-sim",
+            Monitor::Branch => "branches",
             Monitor::Hotness => "hotness",
         }
     }
