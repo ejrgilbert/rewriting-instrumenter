@@ -1,15 +1,15 @@
-use std::collections::HashMap;
+use crate::monitor::{add_util_funcs, call_flush_on_exit, MemTracker, SingleCountHeader};
+use orca_wasm::ir::function::FunctionBuilder;
 use orca_wasm::ir::id::FunctionID;
+use orca_wasm::ir::types::BlockType;
 use orca_wasm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
 use orca_wasm::iterator::module_iterator::ModuleIterator;
-use orca_wasm::{Location, Module, Opcode};
-use orca_wasm::DataType::I32;
-use orca_wasm::ir::function::FunctionBuilder;
-use orca_wasm::ir::types::BlockType;
 use orca_wasm::module_builder::AddLocal;
 use orca_wasm::opcode::MacroOpcode;
+use orca_wasm::DataType::I32;
+use orca_wasm::{Location, Module, Opcode};
+use std::collections::HashMap;
 use wasmparser::MemArg;
-use crate::monitor::{add_util_funcs, call_flush_on_exit, MemTracker, SingleCountHeader};
 
 pub fn instrument(mut wasm: Module) -> Module {
     // setup mem tracker and add in necessary strings for flushing
@@ -19,9 +19,9 @@ pub fn instrument(mut wasm: Module) -> Module {
             ", pc=".to_string(),
             ", [".to_string(),
             "]\n".to_string(),
-            "\n".to_string()
+            "\n".to_string(),
         ],
-        &mut wasm
+        &mut wasm,
     );
     let mut mod_it = ModuleIterator::new(&mut wasm, &vec![]);
 
@@ -40,7 +40,11 @@ fn flush(memory: &mut MemTracker, wasm: &mut Module) {
     call_flush_on_exit(flush_fn, wasm)
 }
 
-fn emit_flush_fn(memory: &mut MemTracker, utils: &HashMap<String, FunctionID>, wasm: &mut Module) -> FunctionID {
+fn emit_flush_fn(
+    memory: &mut MemTracker,
+    utils: &HashMap<String, FunctionID>,
+    wasm: &mut Module,
+) -> FunctionID {
     let mut flush = FunctionBuilder::new(&[], &[]);
 
     // create locals
@@ -133,7 +137,6 @@ fn emit_flush_fn(memory: &mut MemTracker, utils: &HashMap<String, FunctionID>, w
             .end()
         .end();
 
-
     let flush_id = flush.finish_module(wasm);
     wasm.set_fn_name(flush_id, "flush_on_exit".to_string());
 
@@ -142,9 +145,14 @@ fn emit_flush_fn(memory: &mut MemTracker, utils: &HashMap<String, FunctionID>, w
 
 fn inject_instrumentation(wasm: &mut ModuleIterator, memory: &mut MemTracker) {
     loop {
-        let (Location::Module {
-            func_idx, instr_idx
-        }, end) = wasm.curr_loc() else {
+        let (
+            Location::Module {
+                func_idx,
+                instr_idx,
+            },
+            end,
+        ) = wasm.curr_loc()
+        else {
             panic!("non-module locations are not supported")
         };
         if !end {
@@ -170,8 +178,7 @@ fn count_probe(fid: u32, pc: u32, wasm: &mut ModuleIterator, memory: &mut MemTra
     let alloc_at = alloc_count(fid, pc, memory);
 
     // Increment the in-memory value now that we have the offset
-    wasm
-        .u32_const(alloc_at)
+    wasm.u32_const(alloc_at)
         .u32_const(alloc_at)
         .i64_load(mem)
         .i64_const(1)

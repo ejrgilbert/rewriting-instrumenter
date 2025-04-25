@@ -1,21 +1,21 @@
-mod imix;
-mod cache;
 mod branch;
+mod cache;
 mod hotness;
+mod imix;
 
-use std::collections::{HashMap, HashSet};
-use std::io::Error;
-use std::path::{Path, PathBuf};
-use orca_wasm::ir::id::{FunctionID, GlobalID, LocalID, MemoryID};
-use orca_wasm::ir::types::{BlockType, InitExpr};
-use orca_wasm::{DataSegment, DataSegmentKind, DataType, Instructions, Module, Opcode};
 use orca_wasm::ir::function::FunctionBuilder;
+use orca_wasm::ir::id::{FunctionID, GlobalID, LocalID, MemoryID};
 use orca_wasm::ir::module::module_functions::{FuncKind, ImportedFunction, LocalFunction};
 use orca_wasm::ir::types::Value::I32;
+use orca_wasm::ir::types::{BlockType, InitExpr};
 use orca_wasm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
 use orca_wasm::iterator::module_iterator::ModuleIterator;
 use orca_wasm::module_builder::AddLocal;
 use orca_wasm::opcode::Instrumenter;
+use orca_wasm::{DataSegment, DataSegmentKind, DataType, Instructions, Module, Opcode};
+use std::collections::{HashMap, HashSet};
+use std::io::Error;
+use std::path::{Path, PathBuf};
 use wasmparser::{MemArg, MemoryType, Operator};
 
 pub const WASM_PAGE_SIZE: u32 = 65_536;
@@ -24,7 +24,7 @@ pub enum Monitor {
     IMix,
     Cache,
     Branch,
-    Hotness
+    Hotness,
 }
 
 impl Monitor {
@@ -33,7 +33,7 @@ impl Monitor {
             Monitor::IMix => "imix",
             Monitor::Cache => "cache",
             Monitor::Branch => "branch",
-            Monitor::Hotness => "hotness"
+            Monitor::Hotness => "hotness",
         }
     }
 }
@@ -45,7 +45,7 @@ pub fn add_monitor(module: Module, monitor: Monitor, path: &Path) -> Result<(), 
         Monitor::IMix => imix::instrument(module),
         Monitor::Cache => cache::instrument(module),
         Monitor::Branch => branch::instrument(module),
-        Monitor::Hotness => hotness::instrument(module)
+        Monitor::Hotness => hotness::instrument(module),
     };
 
     write_module(instrumented_module, monitor.name(), path)
@@ -61,7 +61,6 @@ fn write_module(mut module: Module, monitor_name: &str, path: &Path) -> Result<(
 
     module.emit_wasm(new_file_name.to_str().unwrap())
 }
-
 
 pub fn add_global(wasm: &mut Module) -> GlobalID {
     wasm.add_global(
@@ -128,7 +127,7 @@ struct MemTracker {
     mem_id: u32,
 
     allocated_vars: Vec<AllocatedVar>,
-    strings: HashMap<String, u32>
+    strings: HashMap<String, u32>,
 }
 impl MemTracker {
     fn new(strs_to_emit: Vec<String>, wasm: &mut Module) -> Self {
@@ -139,7 +138,8 @@ impl MemTracker {
             maximum: None,
             page_size_log2: None,
         });
-        wasm.exports.add_export_mem("instrumentation_mem".to_string(), mem_id);
+        wasm.exports
+            .add_export_mem("instrumentation_mem".to_string(), mem_id);
 
         // go ahead and set up the needed strings so that they live at
         // memory offset 0!
@@ -150,7 +150,7 @@ impl MemTracker {
             var_start_offset: curr_mem_offset,
             mem_id,
             allocated_vars: Vec::default(),
-            strings
+            strings,
         }
     }
 
@@ -178,11 +178,7 @@ impl MemTracker {
     pub fn alloc_multicount_var(&mut self, fid: u32, pc: u32, n: u32) -> u32 {
         let mem_offset = self.curr_mem_offset;
         let allocated_var = AllocatedVar::MultiCount {
-            header: MultiCountHeader {
-                fid,
-                pc,
-                n
-            }
+            header: MultiCountHeader { fid, pc, n },
         };
 
         let len = allocated_var.num_bytes() as u32;
@@ -193,10 +189,7 @@ impl MemTracker {
     pub fn alloc_count_var(&mut self, fid: u32, pc: u32) -> u32 {
         let mem_offset = self.curr_mem_offset;
         let allocated_var = AllocatedVar::SingleCount {
-            header: SingleCountHeader {
-                fid,
-                pc
-            }
+            header: SingleCountHeader { fid, pc },
         };
 
         let len = allocated_var.num_bytes() as u32;
@@ -217,14 +210,13 @@ impl MemTracker {
 
 struct SingleCountHeader {
     fid: u32,
-    pc: u32
+    pc: u32,
 }
 impl SingleCountHeader {
     fn num_bytes() -> usize {
         // 0      4      8
         // | fid  |  pc  |
-        size_of::<u32>() +
-            size_of::<u32>()
+        size_of::<u32>() + size_of::<u32>()
     }
     pub fn encode(&self) -> Vec<u8> {
         let mut res = self.fid.to_le_bytes().to_vec();
@@ -239,18 +231,16 @@ struct MultiCountHeader {
     fid: u32,
     pc: u32,
     // n is the number of entries in the table including the default target
-    n: u32
+    n: u32,
 }
 impl MultiCountHeader {
     fn num_bytes() -> usize {
         // 0      4      8      12        20
         // | fid  |  pc  |   n  |  0 taken |   ...  | n taken |
-        Self::loc_header_size() +
-            size_of::<u32>()
+        Self::loc_header_size() + size_of::<u32>()
     }
     pub fn loc_header_size() -> usize {
-        size_of::<u32>() +
-            size_of::<u32>()
+        size_of::<u32>() + size_of::<u32>()
     }
 
     pub fn encode(&self) -> Vec<u8> {
@@ -266,27 +256,23 @@ impl MultiCountHeader {
 enum AllocatedVar {
     // 0      4      8      16
     // | fid  |  pc  | count |
-    SingleCount {
-        header: SingleCountHeader
-    },
+    SingleCount { header: SingleCountHeader },
     // 0      4      8      12        20
     // | fid  |  pc  |   n  |  0 taken |   ...  | n taken |
-    MultiCount {
-        header: MultiCountHeader
-    }
+    MultiCount { header: MultiCountHeader },
 }
 impl AllocatedVar {
     pub fn encode(&self) -> Vec<u8> {
         match self {
-            Self::SingleCount {header} => {
+            Self::SingleCount { header } => {
                 let mut res = header.encode();
                 // zero padding for single value slot
                 res.extend(0_i64.to_le_bytes());
                 assert_eq!(self.num_bytes(), res.len());
 
                 res
-            },
-            Self::MultiCount {header} => {
+            }
+            Self::MultiCount { header } => {
                 let mut res = header.encode();
                 // zero padding for value slots based on N
                 for _ in 0..header.n {
@@ -295,23 +281,29 @@ impl AllocatedVar {
                 assert_eq!(self.num_bytes(), res.len());
 
                 res
-            },
+            }
         }
     }
     fn num_bytes(&self) -> usize {
         match self {
-            AllocatedVar::SingleCount {..} => self.full_header_size() + size_of::<u64>(),
-            AllocatedVar::MultiCount {header: MultiCountHeader {n, ..}} => self.full_header_size() + (*n as usize * size_of::<u64>()),
+            AllocatedVar::SingleCount { .. } => self.full_header_size() + size_of::<u64>(),
+            AllocatedVar::MultiCount {
+                header: MultiCountHeader { n, .. },
+            } => self.full_header_size() + (*n as usize * size_of::<u64>()),
         }
     }
     pub fn full_header_size(&self) -> usize {
         match self {
-            AllocatedVar::SingleCount {..} => SingleCountHeader::num_bytes(),
-            AllocatedVar::MultiCount {..} => MultiCountHeader::num_bytes()
+            AllocatedVar::SingleCount { .. } => SingleCountHeader::num_bytes(),
+            AllocatedVar::MultiCount { .. } => MultiCountHeader::num_bytes(),
         }
     }
 }
-fn setup_strings(to_emit: Vec<String>, mem_id: u32, wasm: &mut Module) -> (HashMap<String, u32>, u32) {
+fn setup_strings(
+    to_emit: Vec<String>,
+    mem_id: u32,
+    wasm: &mut Module,
+) -> (HashMap<String, u32>, u32) {
     // not using self's memory offset, so we can start back at zero for the actual data segment injections
     // since the allocated vars are in a vector, we can depend on the ordering being correct
     // this is to keep from having a ton of data segments created. We just make a single large one for allocated variables.
@@ -325,7 +317,12 @@ fn setup_strings(to_emit: Vec<String>, mem_id: u32, wasm: &mut Module) -> (HashM
 
     (strings, mem_offset)
 }
-fn add_data_segment(bytes: Vec<u8>, mem_id: u32, target_offset: u32, wasm: &mut Module) -> (u32, u32) {
+fn add_data_segment(
+    bytes: Vec<u8>,
+    mem_id: u32,
+    target_offset: u32,
+    wasm: &mut Module,
+) -> (u32, u32) {
     let len = bytes.len() as u32;
     let data = DataSegment {
         data: bytes,
@@ -339,9 +336,11 @@ fn add_data_segment(bytes: Vec<u8>, mem_id: u32, target_offset: u32, wasm: &mut 
     (target_offset, len)
 }
 
-
 fn add_util_funcs(memory: &mut MemTracker, wasm: &mut Module) -> HashMap<String, FunctionID> {
-    let host_funcs = [("whamm_core", "puti32", vec![DataType::I32], vec![]), ("whamm_core", "putc", vec![DataType::I32], vec![])];
+    let host_funcs = [
+        ("whamm_core", "puti32", vec![DataType::I32], vec![]),
+        ("whamm_core", "putc", vec![DataType::I32], vec![]),
+    ];
 
     let mut utils = HashMap::new();
     for (module, name, params, results) in host_funcs.iter() {
@@ -358,7 +357,11 @@ fn add_util_funcs(memory: &mut MemTracker, wasm: &mut Module) -> HashMap<String,
     utils
 }
 
-fn emit_puts(memory: &mut MemTracker, utils: &HashMap<String, FunctionID>, wasm: &mut Module) -> FunctionID {
+fn emit_puts(
+    memory: &mut MemTracker,
+    utils: &HashMap<String, FunctionID>,
+    wasm: &mut Module,
+) -> FunctionID {
     let start_addr = LocalID(0);
     let len = LocalID(1);
     let mut puts = FunctionBuilder::new(&[DataType::I32, DataType::I32], &[]);
@@ -416,15 +419,9 @@ fn call_flush_on_exit(flush_fn: FunctionID, wasm: &mut Module) {
 }
 
 fn inject_flush_on_end(flush_fn: FunctionID, wasm: &mut Module) {
-    let fid = if let Some(main_fid) = wasm
-        .exports
-        .get_func_by_name("main".to_string())
-    {
+    let fid = if let Some(main_fid) = wasm.exports.get_func_by_name("main".to_string()) {
         main_fid
-    } else if let Some(main_fid) = wasm
-        .exports
-        .get_func_by_name("_start".to_string())
-    {
+    } else if let Some(main_fid) = wasm.exports.get_func_by_name("_start".to_string()) {
         main_fid
     } else if let Some(start_fid) = wasm.start {
         start_fid
@@ -458,9 +455,11 @@ fn inject_flush_on_wasi_exit_calls(flush_fn: FunctionID, wasm: &mut Module) {
 
 fn is_prog_exit_call(opcode: &Operator, wasm: &Module) -> bool {
     match opcode {
-        Operator::Call {function_index: fid} |
-        Operator::ReturnCall {
-            function_index: fid
+        Operator::Call {
+            function_index: fid,
+        }
+        | Operator::ReturnCall {
+            function_index: fid,
         } => {
             let target = match wasm.functions.get_kind(FunctionID(*fid)) {
                 FuncKind::Import(ImportedFunction { import_id, .. }) => {
@@ -474,7 +473,11 @@ fn is_prog_exit_call(opcode: &Operator, wasm: &Module) -> bool {
                         Some(name) => name.clone(),
                         None => "".to_string(),
                     };
-                    let func_name = wasm.functions.get_name(*func_id).clone().unwrap_or_default();
+                    let func_name = wasm
+                        .functions
+                        .get_name(*func_id)
+                        .clone()
+                        .unwrap_or_default();
                     format!("{mod_name}:{func_name}")
                 }
             };

@@ -1,4 +1,4 @@
-# [WIP] WebAssembly Bytecode Instrumenter
+# WebAssembly Bytecode Instrumenter
 
 Injects instrumentation bytecode directly into Wasm bytecode to perform some simple dynamic analyses. Built using [Orca](https://github.com/thesuhas/orca), a Wasm transformation library.
 
@@ -22,3 +22,11 @@ This was implemented as part of an experiment comparing various instrumentation 
 
 This should generate a new Wasm program injected with instrumentation bytecode that you can run using
 any Wasm engine that supports [multi-memory](https://github.com/WebAssembly/multi-memory) as it uses a separate memory region to store counts.
+
+To run, you must link with the [whamm core library](https://github.com/ejrgilbert/whamm/tree/master/whamm_core) (provides the ability to print to the console using WASI).
+For the cache, you also need to link with the [cache library](https://github.com/ejrgilbert/whamm/tree/master/user_libs/cache).
+
+Example run (cache simulator):
+```
+wizeng -ext:multi-memory --env=TO_CONSOLE=true   ../git/whamm/whamm_core/target/wasm32-wasip1/release/whamm_core.wasm ../git/whamm/user_libs/cache/target/wasm32-wasip1/release/cache.wasm ./malloc_init-cache.wasm
+```

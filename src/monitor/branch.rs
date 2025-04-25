@@ -1,17 +1,18 @@
-use std::collections::HashMap;
+use crate::monitor::branch::Case::{NoMatch, SimpleBranch, Table};
+use crate::monitor::{
+    add_util_funcs, call_flush_on_exit, LocalsTracker, MemTracker, MultiCountHeader,
+};
+use orca_wasm::ir::function::FunctionBuilder;
 use orca_wasm::ir::id::{FunctionID, LocalID};
+use orca_wasm::ir::types::BlockType;
 use orca_wasm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
 use orca_wasm::iterator::module_iterator::ModuleIterator;
-use orca_wasm::{Location, Module, Opcode};
-use orca_wasm::DataType::I32;
-use orca_wasm::ir::function::FunctionBuilder;
-use orca_wasm::ir::types::BlockType;
 use orca_wasm::module_builder::AddLocal;
 use orca_wasm::opcode::MacroOpcode;
+use orca_wasm::DataType::I32;
+use orca_wasm::{Location, Module, Opcode};
+use std::collections::HashMap;
 use wasmparser::{MemArg, Operator};
-use crate::monitor::branch::Case::{NoMatch, SimpleBranch, Table};
-use crate::monitor::{add_util_funcs, call_flush_on_exit, LocalsTracker, MemTracker, MultiCountHeader};
-
 
 pub fn instrument(mut wasm: Module) -> Module {
     let mut locals = LocalsTracker::default();
@@ -23,9 +24,9 @@ pub fn instrument(mut wasm: Module) -> Module {
             ", [".to_string(),
             "]\n".to_string(),
             "\n".to_string(),
-            ",".to_string()
+            ",".to_string(),
         ],
-        &mut wasm
+        &mut wasm,
     );
     let mut mod_it = ModuleIterator::new(&mut wasm, &vec![]);
 
@@ -44,7 +45,11 @@ fn flush(memory: &mut MemTracker, wasm: &mut Module) {
     call_flush_on_exit(flush_fn, wasm)
 }
 
-fn emit_flush_fn(memory: &mut MemTracker, utils: &HashMap<String, FunctionID>, wasm: &mut Module) -> FunctionID {
+fn emit_flush_fn(
+    memory: &mut MemTracker,
+    utils: &HashMap<String, FunctionID>,
+    wasm: &mut Module,
+) -> FunctionID {
     let mut flush = FunctionBuilder::new(&[], &[]);
 
     // create locals
@@ -163,24 +168,32 @@ fn emit_flush_fn(memory: &mut MemTracker, utils: &HashMap<String, FunctionID>, w
             .end()
         .end();
 
-
     let flush_id = flush.finish_module(wasm);
     wasm.set_fn_name(flush_id, "flush_on_exit".to_string());
 
     flush_id
 }
 
-fn inject_instrumentation(wasm: &mut ModuleIterator, locals: &mut LocalsTracker, memory: &mut MemTracker) {
-    let mut curr_fid = if let Location::Module {func_idx, ..} = wasm.curr_loc().0 {
+fn inject_instrumentation(
+    wasm: &mut ModuleIterator,
+    locals: &mut LocalsTracker,
+    memory: &mut MemTracker,
+) {
+    let mut curr_fid = if let Location::Module { func_idx, .. } = wasm.curr_loc().0 {
         func_idx
     } else {
         panic!("we don't support non-module locations (components don't work atm).")
     };
     loop {
         if let Some(op) = wasm.curr_op() {
-            let (Location::Module {
-                func_idx, instr_idx
-            }, _) = wasm.curr_loc() else {
+            let (
+                Location::Module {
+                    func_idx,
+                    instr_idx,
+                },
+                _,
+            ) = wasm.curr_loc()
+            else {
                 panic!("non-module locations are not supported")
             };
             if curr_fid != func_idx {
@@ -188,10 +201,10 @@ fn inject_instrumentation(wasm: &mut ModuleIterator, locals: &mut LocalsTracker,
                 curr_fid = func_idx;
             }
             let case = match op {
-                Operator::If { .. } |
-                Operator::BrIf { .. } => SimpleBranch,
-                Operator::BrTable { targets } => Table {num_targets: targets.len()},
-                Operator::Select => NoMatch,
+                Operator::If { .. } | Operator::BrIf { .. } => SimpleBranch,
+                Operator::BrTable { targets } => Table {
+                    num_targets: targets.len(),
+                },
                 _ => NoMatch,
             };
 
@@ -200,8 +213,15 @@ fn inject_instrumentation(wasm: &mut ModuleIterator, locals: &mut LocalsTracker,
                     simple_branch_probe(*func_idx, instr_idx as u32, wasm, locals, memory);
                     locals.reset_probe();
                 }
-                Table {num_targets} => {
-                    br_table_probe(*func_idx, instr_idx as u32, num_targets, wasm, locals, memory);
+                Table { num_targets } => {
+                    br_table_probe(
+                        *func_idx,
+                        instr_idx as u32,
+                        num_targets,
+                        wasm,
+                        locals,
+                        memory,
+                    );
                     locals.reset_probe();
                 }
                 NoMatch => {}
@@ -217,10 +237,16 @@ fn inject_instrumentation(wasm: &mut ModuleIterator, locals: &mut LocalsTracker,
 enum Case {
     NoMatch,
     SimpleBranch,
-    Table {num_targets: u32}
+    Table { num_targets: u32 },
 }
 
-fn simple_branch_probe(fid: u32, pc: u32, wasm: &mut ModuleIterator, locals: &mut LocalsTracker, memory: &mut MemTracker) {
+fn simple_branch_probe(
+    fid: u32,
+    pc: u32,
+    wasm: &mut ModuleIterator,
+    locals: &mut LocalsTracker,
+    memory: &mut MemTracker,
+) {
     wasm.before();
 
     let mem = MemArg {
@@ -249,8 +275,7 @@ fn simple_branch_probe(fid: u32, pc: u32, wasm: &mut ModuleIterator, locals: &mu
         .local_tee(mem_offset);
 
     // Increment the in-memory value now that we have the offset
-    wasm
-        .local_get(mem_offset)
+    wasm.local_get(mem_offset)
         .i64_load(mem)
         .i64_const(1)
         .i64_add()
@@ -259,7 +284,14 @@ fn simple_branch_probe(fid: u32, pc: u32, wasm: &mut ModuleIterator, locals: &mu
     fix_stack(wasm, &vec![arg0]);
 }
 
-fn br_table_probe(fid: u32, pc: u32, num_targets: u32, wasm: &mut ModuleIterator, locals: &mut LocalsTracker, memory: &mut MemTracker) {
+fn br_table_probe(
+    fid: u32,
+    pc: u32,
+    num_targets: u32,
+    wasm: &mut ModuleIterator,
+    locals: &mut LocalsTracker,
+    memory: &mut MemTracker,
+) {
     wasm.before();
 
     // targets.len is the number of targets (not including the default)
@@ -271,8 +303,7 @@ fn br_table_probe(fid: u32, pc: u32, num_targets: u32, wasm: &mut ModuleIterator
 
     // which branch was taken?
     // max = `n`; where `n` = num_targets - 1
-    wasm
-        .local_get(arg0)
+    wasm.local_get(arg0)
         .local_tee(tgt)
         .u32_const(alloc_at)
         .i32_load(MemArg {
@@ -295,32 +326,27 @@ fn br_table_probe(fid: u32, pc: u32, num_targets: u32, wasm: &mut ModuleIterator
         .end();
 
     // account for number of bits used to store each count (8 bits per u64)
-    wasm
-        .local_get(tgt)
-        .i32_const(3)
-        .i32_shl();
+    wasm.local_get(tgt).i32_const(3).i32_shl();
 
-    wasm
-        .u32_const(alloc_at)
+    wasm.u32_const(alloc_at)
         .i32_add()
         .local_tee(addr)
         .local_get(addr);
 
-    wasm
-        .i64_load(MemArg {
-            align: 0,
-            max_align: 0,
-            offset: MultiCountHeader::num_bytes() as u64,
-            memory: memory.mem_id,
-        })
-        .i64_const(1)
-        .i64_add()
-        .i64_store(MemArg {
-            align: 0,
-            max_align: 0,
-            offset: MultiCountHeader::num_bytes() as u64,
-            memory: memory.mem_id,
-        });
+    wasm.i64_load(MemArg {
+        align: 0,
+        max_align: 0,
+        offset: MultiCountHeader::num_bytes() as u64,
+        memory: memory.mem_id,
+    })
+    .i64_const(1)
+    .i64_add()
+    .i64_store(MemArg {
+        align: 0,
+        max_align: 0,
+        offset: MultiCountHeader::num_bytes() as u64,
+        memory: memory.mem_id,
+    });
 
     fix_stack(wasm, &vec![arg0]);
 }

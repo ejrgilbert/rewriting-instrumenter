@@ -1,7 +1,7 @@
-use std::{env, fs, path::Path};
 use anyhow::bail;
 use orca_wasm::Module;
 use rewriting_monitor::monitor::{add_monitor, Monitor};
+use std::{env, fs, path::Path};
 
 fn main() -> Result<(), anyhow::Error> {
     let args: Vec<String> = env::args().skip(1).collect();

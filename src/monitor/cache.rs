@@ -1,18 +1,25 @@
-use std::collections::HashMap;
+use crate::monitor::{add_global, add_util_funcs, call_flush_on_exit, LocalsTracker, MemTracker};
+use orca_wasm::ir::function::FunctionBuilder;
 use orca_wasm::ir::id::{FunctionID, GlobalID, LocalID};
 use orca_wasm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
 use orca_wasm::iterator::module_iterator::ModuleIterator;
-use orca_wasm::{DataType, Location, Module, Opcode};
-use orca_wasm::DataType::{F32, F64, I32, I64};
-use orca_wasm::ir::function::FunctionBuilder;
 use orca_wasm::opcode::MacroOpcode;
+use orca_wasm::DataType::{F32, F64, I32, I64};
+use orca_wasm::{DataType, Location, Module, Opcode};
+use std::collections::HashMap;
 use wasmparser::{MemArg, Operator};
-use crate::monitor::{add_global, add_util_funcs, call_flush_on_exit, LocalsTracker, MemTracker};
 
 pub fn instrument(mut wasm: Module) -> Module {
     let globals = Globals::new(&mut wasm);
     let mut locals = LocalsTracker::default();
-    let mut memory = MemTracker::new(vec!["\nhit: ".to_string(), "\nmiss: ".to_string(), "\n".to_string()], &mut wasm);
+    let mut memory = MemTracker::new(
+        vec![
+            "\nhit: ".to_string(),
+            "\nmiss: ".to_string(),
+            "\n".to_string(),
+        ],
+        &mut wasm,
+    );
     let check_access = import_lib(&mut wasm);
     let mut mod_it = ModuleIterator::new(&mut wasm, &vec![]);
 
@@ -30,7 +37,12 @@ fn flush(globals: &Globals, memory: &mut MemTracker, wasm: &mut Module) {
     call_flush_on_exit(flush_fn, wasm)
 }
 
-fn emit_flush_fn(globals: &Globals, memory: &mut MemTracker, utils: &HashMap<String, FunctionID>, wasm: &mut Module) -> FunctionID {
+fn emit_flush_fn(
+    globals: &Globals,
+    memory: &mut MemTracker,
+    utils: &HashMap<String, FunctionID>,
+    wasm: &mut Module,
+) -> FunctionID {
     let mut flush = FunctionBuilder::new(&[], &[]);
 
     let Some(puts) = utils.get("puts") else {
@@ -52,9 +64,7 @@ fn emit_flush_fn(globals: &Globals, memory: &mut MemTracker, utils: &HashMap<Str
         .u32_const(hit_len as u32)
         .call(puts);
 
-    flush
-        .global_get(globals.hit)
-        .call(puti);
+    flush.global_get(globals.hit).call(puti);
 
     // print "\nmiss: "
     flush
@@ -62,9 +72,7 @@ fn emit_flush_fn(globals: &Globals, memory: &mut MemTracker, utils: &HashMap<Str
         .u32_const(miss_len as u32)
         .call(puts);
 
-    flush
-        .global_get(globals.miss)
-        .call(puti);
+    flush.global_get(globals.miss).call(puti);
 
     // print "\n: "
     flush
@@ -78,14 +86,19 @@ fn emit_flush_fn(globals: &Globals, memory: &mut MemTracker, utils: &HashMap<Str
     flush_id
 }
 
-fn inject_instrumentation(wasm: &mut ModuleIterator, locals: &mut LocalsTracker, globals: &Globals, check_access: FunctionID) {
-    let mut curr_fid = if let Location::Module {func_idx, ..} = wasm.curr_loc().0 {
+fn inject_instrumentation(
+    wasm: &mut ModuleIterator,
+    locals: &mut LocalsTracker,
+    globals: &Globals,
+    check_access: FunctionID,
+) {
+    let mut curr_fid = if let Location::Module { func_idx, .. } = wasm.curr_loc().0 {
         func_idx
     } else {
         panic!("we don't support non-module locations (components don't work atm).")
     };
     loop {
-        if let Location::Module {func_idx, ..} = wasm.curr_loc().0 {
+        if let Location::Module { func_idx, .. } = wasm.curr_loc().0 {
             if curr_fid != func_idx {
                 locals.reset_function();
                 curr_fid = func_idx;
@@ -95,40 +108,109 @@ fn inject_instrumentation(wasm: &mut ModuleIterator, locals: &mut LocalsTracker,
         };
         if let Some(op) = wasm.curr_op() {
             if let Some((val_dt, offset, num_bytes)) = match op {
-                Operator::I32Load8S { memarg: MemArg {offset, .. }, .. } |
-                Operator::I32Load8U { memarg: MemArg {offset, .. }, .. } |
-                Operator::I64Load8S { memarg: MemArg {offset, .. }, .. } |
-                Operator::I64Load8U { memarg: MemArg {offset, .. }, .. } => {
-                    Some((None, *offset, 1))
+                Operator::I32Load8S {
+                    memarg: MemArg { offset, .. },
+                    ..
                 }
-                Operator::I32Load16S { memarg: MemArg {offset, .. }, .. } |
-                Operator::I32Load16U { memarg: MemArg {offset, .. }, .. } |
-                Operator::I64Load16S { memarg: MemArg {offset, .. }, .. } |
-                Operator::I64Load16U { memarg: MemArg {offset, .. }, .. } => {
-                    Some((None, *offset, 2))
-                },
-                Operator::I32Load { memarg: MemArg {offset, .. }, .. } |
-                Operator::I64Load32U { memarg: MemArg {offset, .. }, .. } |
-                Operator::I64Load32S { memarg: MemArg {offset, .. }, .. } |
-                Operator::F32Load { memarg: MemArg {offset, .. }, .. } => {
-                    Some((None, *offset, 4))
+                | Operator::I32Load8U {
+                    memarg: MemArg { offset, .. },
+                    ..
                 }
-                Operator::I64Load { memarg: MemArg {offset, .. }, .. } |
-                Operator::F64Load { memarg: MemArg {offset, .. }, .. } => {
-                    Some((None, *offset, 8))
+                | Operator::I64Load8S {
+                    memarg: MemArg { offset, .. },
+                    ..
                 }
-                Operator::I32Store8 { memarg: MemArg {offset, .. }, .. } => Some((Some(I32), *offset, 1)),
-                Operator::I64Store8 { memarg: MemArg {offset, .. }, .. } => Some((Some(I64), *offset, 1)),
-                Operator::I32Store16 { memarg: MemArg {offset, .. }, .. } => Some((Some(I32), *offset, 2)),
-                Operator::I64Store16 { memarg: MemArg {offset, .. }, .. } => Some((Some(I64), *offset, 2)),
-                Operator::I32Store { memarg: MemArg {offset, .. }, .. } => Some((Some(I32), *offset, 4)),
-                Operator::F32Store { memarg: MemArg {offset, .. }, .. } => Some((Some(F32), *offset, 4)),
-                Operator::I64Store32 { memarg: MemArg {offset, .. }, .. } => Some((Some(I64), *offset, 4)),
-                Operator::I64Store { memarg: MemArg {offset, .. }, .. } => Some((Some(I64), *offset, 8)),
-                Operator::F64Store { memarg: MemArg {offset, .. }, .. } => Some((Some(F64), *offset, 8)),
+                | Operator::I64Load8U {
+                    memarg: MemArg { offset, .. },
+                    ..
+                } => Some((None, *offset, 1)),
+                Operator::I32Load16S {
+                    memarg: MemArg { offset, .. },
+                    ..
+                }
+                | Operator::I32Load16U {
+                    memarg: MemArg { offset, .. },
+                    ..
+                }
+                | Operator::I64Load16S {
+                    memarg: MemArg { offset, .. },
+                    ..
+                }
+                | Operator::I64Load16U {
+                    memarg: MemArg { offset, .. },
+                    ..
+                } => Some((None, *offset, 2)),
+                Operator::I32Load {
+                    memarg: MemArg { offset, .. },
+                    ..
+                }
+                | Operator::I64Load32U {
+                    memarg: MemArg { offset, .. },
+                    ..
+                }
+                | Operator::I64Load32S {
+                    memarg: MemArg { offset, .. },
+                    ..
+                }
+                | Operator::F32Load {
+                    memarg: MemArg { offset, .. },
+                    ..
+                } => Some((None, *offset, 4)),
+                Operator::I64Load {
+                    memarg: MemArg { offset, .. },
+                    ..
+                }
+                | Operator::F64Load {
+                    memarg: MemArg { offset, .. },
+                    ..
+                } => Some((None, *offset, 8)),
+                Operator::I32Store8 {
+                    memarg: MemArg { offset, .. },
+                    ..
+                } => Some((Some(I32), *offset, 1)),
+                Operator::I64Store8 {
+                    memarg: MemArg { offset, .. },
+                    ..
+                } => Some((Some(I64), *offset, 1)),
+                Operator::I32Store16 {
+                    memarg: MemArg { offset, .. },
+                    ..
+                } => Some((Some(I32), *offset, 2)),
+                Operator::I64Store16 {
+                    memarg: MemArg { offset, .. },
+                    ..
+                } => Some((Some(I64), *offset, 2)),
+                Operator::I32Store {
+                    memarg: MemArg { offset, .. },
+                    ..
+                } => Some((Some(I32), *offset, 4)),
+                Operator::F32Store {
+                    memarg: MemArg { offset, .. },
+                    ..
+                } => Some((Some(F32), *offset, 4)),
+                Operator::I64Store32 {
+                    memarg: MemArg { offset, .. },
+                    ..
+                } => Some((Some(I64), *offset, 4)),
+                Operator::I64Store {
+                    memarg: MemArg { offset, .. },
+                    ..
+                } => Some((Some(I64), *offset, 8)),
+                Operator::F64Store {
+                    memarg: MemArg { offset, .. },
+                    ..
+                } => Some((Some(F64), *offset, 8)),
                 _ => None,
             } {
-                perform_cache_lookup(val_dt, offset, num_bytes, wasm, locals, globals, check_access);
+                perform_cache_lookup(
+                    val_dt,
+                    offset,
+                    num_bytes,
+                    wasm,
+                    locals,
+                    globals,
+                    check_access,
+                );
                 locals.reset_probe();
             }
         }
@@ -150,7 +232,15 @@ fn import_lib(wasm: &mut Module) -> FunctionID {
     fid
 }
 
-fn perform_cache_lookup(val_dt: Option<DataType>, static_offset: u64, num_bytes: u32, wasm: &mut ModuleIterator, locals: &mut LocalsTracker, globals: &Globals, check_access: FunctionID) {
+fn perform_cache_lookup(
+    val_dt: Option<DataType>,
+    static_offset: u64,
+    num_bytes: u32,
+    wasm: &mut ModuleIterator,
+    locals: &mut LocalsTracker,
+    globals: &Globals,
+    check_access: FunctionID,
+) {
     wasm.before();
 
     let orig_stack_vals = bundle_args(val_dt, static_offset, num_bytes, wasm, locals);
@@ -162,7 +252,13 @@ fn perform_cache_lookup(val_dt: Option<DataType>, static_offset: u64, num_bytes:
 }
 
 /// Returns values in the order that they should be replaced on the stack!
-fn bundle_args(val_dt: Option<DataType>, static_offset: u64, data_size: u32, wasm: &mut ModuleIterator, locals: &mut LocalsTracker) -> Vec<LocalID> {
+fn bundle_args(
+    val_dt: Option<DataType>,
+    static_offset: u64,
+    data_size: u32,
+    wasm: &mut ModuleIterator,
+    locals: &mut LocalsTracker,
+) -> Vec<LocalID> {
     let orig_stack_vals;
 
     let addr = if let Some(dt) = val_dt {
@@ -185,8 +281,7 @@ fn bundle_args(val_dt: Option<DataType>, static_offset: u64, data_size: u32, was
     // the effective address
     wasm.local_get(addr);
     if static_offset > 0 {
-        wasm.u32_const(static_offset as u32)
-            .i32_add();
+        wasm.u32_const(static_offset as u32).i32_add();
     }
 
     // the size of the data being accessed
@@ -207,16 +302,14 @@ fn decode_result(wasm: &mut ModuleIterator, locals: &mut LocalsTracker, globals:
     wasm.local_tee(result);
 
     // decode number of hits
-    wasm
-        .u32_const(0xFFFF0000)
+    wasm.u32_const(0xFFFF0000)
         .i32_and()
         .i32_const(16)
         .i32_shr_signed()
         .local_set(hits);
 
     // decode number of misses
-    wasm
-        .local_get(result)
+    wasm.local_get(result)
         .u32_const(0x0000FFFF)
         .i32_and()
         .local_set(misses);
@@ -232,7 +325,6 @@ fn decode_result(wasm: &mut ModuleIterator, locals: &mut LocalsTracker, globals:
         .local_get(misses)
         .i32_add()
         .global_set(globals.miss);
-
 }
 fn fix_stack(wasm: &mut ModuleIterator, orig_stack_vals: &Vec<LocalID>) {
     for local in orig_stack_vals {
