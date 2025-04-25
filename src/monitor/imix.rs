@@ -1,5 +1,4 @@
-use orca_wasm::ir::types::{InitExpr, Value};
-use orca_wasm::{DataType, Instructions, Module, Opcode};
+use orca_wasm::{Module, Opcode};
 use orca_wasm::ir::id::GlobalID;
 use orca_wasm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
 use orca_wasm::iterator::module_iterator::ModuleIterator;

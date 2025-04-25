@@ -1,3 +1,6 @@
+# Instrumented wasm modules
+*.wasm
+
 # IntelliJ configuration
 .idea/
 #vscode settings

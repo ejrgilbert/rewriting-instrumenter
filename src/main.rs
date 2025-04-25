@@ -1,7 +1,7 @@
 use std::{env, fs, path::Path};
 use anyhow::bail;
 use orca_wasm::Module;
-use rewrite::monitor::{add_monitor, Monitor};
+use rewriting_monitor::monitor::{add_monitor, Monitor};
 
 fn main() -> Result<(), anyhow::Error> {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -18,6 +18,7 @@ fn main() -> Result<(), anyhow::Error> {
     let monitor: Monitor = match &args[0][..] {
         "imix" => Monitor::IMix,
         "cache" => Monitor::Cache,
+        "branch" => Monitor::Branch,
         name => bail!("Invalid monitor {}", name),
     };
 

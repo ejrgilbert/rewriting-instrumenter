@@ -1,9 +1,11 @@
 [package]
-name = "rewrite"
+name = "rewriting_monitor"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 anyhow = "1.0.97"
-orca-wasm = "0.9.0"
+#orca-wasm = "0.9.0"
+orca-wasm = { path = "../../../compilers/orca" }
 wasmparser = "0.224.0"
+log = "0.4.26"

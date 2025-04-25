@@ -1,13 +1,11 @@
-use std::collections::HashMap;
 use orca_wasm::ir::id::{FunctionID, GlobalID, LocalID};
 use orca_wasm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
 use orca_wasm::iterator::module_iterator::ModuleIterator;
-use orca_wasm::{DataType, Module, Opcode};
+use orca_wasm::{DataType, Location, Module, Opcode};
 use orca_wasm::DataType::{F32, F64, I32, I64};
-use orca_wasm::module_builder::AddLocal;
 use orca_wasm::opcode::MacroOpcode;
 use wasmparser::{MemArg, Operator};
-use crate::monitor::add_global;
+use crate::monitor::{add_global, LocalsTracker};
 
 pub fn instrument(mut wasm: Module) -> Module {
     let globals = Globals::new(&mut wasm);
@@ -21,7 +19,20 @@ pub fn instrument(mut wasm: Module) -> Module {
 }
 
 fn inject_instrumentation(wasm: &mut ModuleIterator, locals: &mut LocalsTracker, globals: &Globals, check_access: FunctionID) {
+    let mut curr_fid = if let Location::Module {func_idx, ..} = wasm.curr_loc().0 {
+        func_idx
+    } else {
+        panic!("we don't support non-module locations (components don't work atm).")
+    };
     loop {
+        if let Location::Module {func_idx, ..} = wasm.curr_loc().0 {
+            if curr_fid != func_idx {
+                locals.reset_function();
+                curr_fid = func_idx;
+            }
+        } else {
+            panic!("we don't support non-module locations (components don't work atm).")
+        };
         if let Some(op) = wasm.curr_op() {
             if let Some((val_dt, offset, num_bytes)) = match op {
                 Operator::I32Load8S { memarg: MemArg {offset, .. }, .. } |
@@ -58,6 +69,7 @@ fn inject_instrumentation(wasm: &mut ModuleIterator, locals: &mut LocalsTracker,
                 _ => None,
             } {
                 perform_cache_lookup(val_dt, offset, num_bytes, wasm, locals, globals, check_access);
+                locals.reset_probe();
             }
         }
 
@@ -91,7 +103,7 @@ fn perform_cache_lookup(val_dt: Option<DataType>, static_offset: u64, num_bytes:
 
 /// Returns values in the order that they should be replaced on the stack!
 fn bundle_args(val_dt: Option<DataType>, static_offset: u64, data_size: u32, wasm: &mut ModuleIterator, locals: &mut LocalsTracker) -> Vec<LocalID> {
-    let mut orig_stack_vals = vec![];
+    let orig_stack_vals;
 
     let addr = if let Some(dt) = val_dt {
         let addr = LocalID(locals.use_local(I32, wasm));
@@ -178,57 +190,5 @@ impl Globals {
             hit: add_global(wasm),
             miss: add_global(wasm),
         }
-    }
-}
-
-#[derive(Default)]
-pub struct LocalsTracker {
-    available: HashMap<DataType, Vec<u32>>,
-    in_use: HashMap<DataType, Vec<u32>>,
-}
-impl LocalsTracker {
-    pub fn use_local<T: AddLocal>(&mut self, ty: DataType, injector: &mut T) -> u32 {
-        let id = if let Some(list) = self.available.get_mut(&ty) {
-            if let Some(id) = list.pop() {
-                id
-            } else {
-                *injector.add_local(ty)
-            }
-        } else {
-            *injector.add_local(ty)
-        };
-
-        self.add_in_use(ty, id);
-        id
-    }
-    fn add_in_use(&mut self, ty: DataType, id: u32) {
-        self.in_use
-            .entry(ty)
-            .and_modify(|list| {
-                // insert at the beginning so that lower IDs are at the top
-                // (for `extend` to keep them there)
-                list.insert(0, id);
-            })
-            .or_insert(vec![id]);
-    }
-    pub fn add(&mut self, ty: DataType, id: u32) {
-        self.available
-            .entry(ty)
-            .and_modify(|list| {
-                // insert at the beginning so that lower IDs are at the top
-                // (for `pop`)
-                list.insert(0, id);
-            })
-            .or_insert(vec![id]);
-    }
-    pub fn reset_probe<'a, T: Opcode<'a>>(&mut self, _injector: &mut T) {
-        // Reset the local variables to their default value, keeps value guarantee consistent
-        // between probe body entries!
-        self.available.extend(self.in_use.to_owned());
-        self.in_use.clear();
-    }
-    pub fn reset_function(&mut self) {
-        self.available.clear();
-        self.in_use.clear();
     }
 }

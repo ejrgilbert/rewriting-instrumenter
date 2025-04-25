@@ -1,6 +1,6 @@
 # [WIP] WebAssembly Bytecode Instrumenter
 
-Injects instrumentation bytecode directly into Wasm bytecode to perform some simple dynamic analyses. Built using [Walrus](https://github.com/rustwasm/walrus), a Wasm transformation library.
+Injects instrumentation bytecode directly into Wasm bytecode to perform some simple dynamic analyses. Built using [Orca](https://github.com/thesuhas/orca), a Wasm transformation library.
 
 This was implemented as part of an experiment comparing various instrumentation implementations with the [Whamm](https://github.com/ejrgilbert/whamm) DSL.
 
@@ -8,7 +8,7 @@ This was implemented as part of an experiment comparing various instrumentation 
 
 - **Hotness monitor**: Inserts counting bytecode at every instruction and then produces a summary of hot execution paths.
 
-- **Branch monitor**: Instruments all `if`, `br_if` and `br_table` instructions in the program and uses the top-of-stack to predict the direction each branch will take.
+- **Branch monitor**: Instruments all `if`, `br_if`, and `br_table` instructions in the program and uses the top-of-stack to predict the direction each branch will take.
 
 - **Instruction Mix monitor**: Instruments all opcodes and counts the number of times each category of monitor is executed dynamically.
 
