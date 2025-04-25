@@ -1,9 +1,12 @@
+use std::collections::HashMap;
 use orca_wasm::{Module, Opcode};
-use orca_wasm::ir::id::GlobalID;
+use orca_wasm::ir::function::FunctionBuilder;
+use orca_wasm::ir::id::{FunctionID, GlobalID};
 use orca_wasm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
 use orca_wasm::iterator::module_iterator::ModuleIterator;
+use orca_wasm::opcode::MacroOpcode;
 use wasmparser::Operator;
-use crate::monitor::add_global;
+use crate::monitor::{add_global, add_util_funcs, call_flush_on_exit, MemTracker};
 
 struct Globals {
     _const: GlobalID,
@@ -50,11 +53,234 @@ impl Globals {
 ///     3. TODO: Figure out how to print the output at the end.
 pub fn instrument(mut wasm: Module) -> Module {
     let globals = Globals::new(&mut wasm);
+
+    let mut memory = MemTracker::new(
+        vec![
+            "\nconst: ".to_string(),
+            "\nmisc: ".to_string(),
+            "\ncontrol: ".to_string(),
+            "\nlocal: ".to_string(),
+            "\nglobal: ".to_string(),
+            "\ntable: ".to_string(),
+            "\nload: ".to_string(),
+            "\nstore: ".to_string(),
+            "\nmem: ".to_string(),
+            "\narith: ".to_string(),
+            "\ncompare: ".to_string(),
+            "\nconvert: ".to_string(),
+            "\nexn: ".to_string(),
+            "\ngc: ".to_string(),
+            "\natomic: ".to_string(),
+            "\n".to_string()
+        ],
+        &mut wasm
+    );
     let mut mod_it = ModuleIterator::new(&mut wasm, &vec![]);
 
     inject_instrumentation(&mut mod_it, &globals);
+    flush(&globals, &mut memory, &mut wasm);
+    // make sure the memory is large enough!
+    memory.memory_grow(&mut wasm);
 
     wasm
+}
+
+fn flush(globals: &Globals, memory: &mut MemTracker, wasm: &mut Module) {
+    let utils = add_util_funcs(memory, wasm);
+    let flush_fn = emit_flush_fn(globals, memory, &utils, wasm);
+    call_flush_on_exit(flush_fn, wasm)
+}
+
+fn emit_flush_fn(globals: &Globals, memory: &mut MemTracker, utils: &HashMap<String, FunctionID>, wasm: &mut Module) -> FunctionID {
+    let mut flush = FunctionBuilder::new(&[], &[]);
+
+    let Some(puts) = utils.get("puts") else {
+        panic!("could not find puts hostfunc")
+    };
+    let puts = *puts;
+    let Some(puti) = utils.get("puti32") else {
+        panic!("could not find puti hostfunc")
+    };
+    let puti = *puti;
+
+    let (const_addr, const_len) = memory.get_str("\nconst: ");
+    let (misc_addr, misc_len) = memory.get_str("\nmisc: ");
+    let (control_addr, control_len) = memory.get_str("\ncontrol: ");
+    let (local_addr, local_len) = memory.get_str("\nlocal: ");
+    let (global_addr, global_len) = memory.get_str("\nglobal: ");
+    let (table_addr, table_len) = memory.get_str("\ntable: ");
+    let (load_addr, load_len) = memory.get_str("\nload: ");
+    let (store_addr, store_len) = memory.get_str("\nstore: ");
+    let (mem_addr, mem_len) = memory.get_str("\nmem: ");
+    let (arith_addr, arith_len) = memory.get_str("\narith: ");
+    let (compare_addr, compare_len) = memory.get_str("\ncompare: ");
+    let (convert_addr, convert_len) = memory.get_str("\nconvert: ");
+    let (exn_addr, exn_len) = memory.get_str("\nexn: ");
+    let (gc_addr, gc_len) = memory.get_str("\ngc: ");
+    let (atomic_addr, atomic_len) = memory.get_str("\natomic: ");
+
+    let (newline_addr, newline_len) = memory.get_str("\n");
+
+    // print "\nconst: "
+    flush
+        .u32_const(const_addr)
+        .u32_const(const_len as u32)
+        .call(puts);
+
+    flush
+        .global_get(globals._const)
+        .call(puti);
+
+    // print "\nmisc: "
+    flush
+        .u32_const(misc_addr)
+        .u32_const(misc_len as u32)
+        .call(puts);
+
+    flush
+        .global_get(globals.misc)
+        .call(puti);
+
+    // print "\ncontrol: "
+    flush
+        .u32_const(control_addr)
+        .u32_const(control_len as u32)
+        .call(puts);
+
+    flush
+        .global_get(globals.control)
+        .call(puti);
+
+    // print "\nlocal: "
+    flush
+        .u32_const(local_addr)
+        .u32_const(local_len as u32)
+        .call(puts);
+
+    flush
+        .global_get(globals.local)
+        .call(puti);
+
+    // print "\nglobal: "
+    flush
+        .u32_const(global_addr)
+        .u32_const(global_len as u32)
+        .call(puts);
+
+    flush
+        .global_get(globals.global)
+        .call(puti);
+
+    // print "\ntable: "
+    flush
+        .u32_const(table_addr)
+        .u32_const(table_len as u32)
+        .call(puts);
+
+    flush
+        .global_get(globals.table)
+        .call(puti);
+
+    // print "\nload: "
+    flush
+        .u32_const(load_addr)
+        .u32_const(load_len as u32)
+        .call(puts);
+
+    flush
+        .global_get(globals.load)
+        .call(puti);
+
+    // print "\nstore: "
+    flush
+        .u32_const(store_addr)
+        .u32_const(store_len as u32)
+        .call(puts);
+
+    flush
+        .global_get(globals.store)
+        .call(puti);
+
+    // print "\nmem: "
+    flush
+        .u32_const(mem_addr)
+        .u32_const(mem_len as u32)
+        .call(puts);
+
+    flush
+        .global_get(globals.mem)
+        .call(puti);
+
+    // print "\narith: "
+    flush
+        .u32_const(arith_addr)
+        .u32_const(arith_len as u32)
+        .call(puts);
+
+    flush
+        .global_get(globals.arith)
+        .call(puti);
+
+    // print "\ncompare: "
+    flush
+        .u32_const(compare_addr)
+        .u32_const(compare_len as u32)
+        .call(puts);
+
+    flush
+        .global_get(globals.compare)
+        .call(puti);
+
+    // print "\nconvert: "
+    flush
+        .u32_const(convert_addr)
+        .u32_const(convert_len as u32)
+        .call(puts);
+
+    flush
+        .global_get(globals.convert)
+        .call(puti);
+
+    // print "\nexn: "
+    flush
+        .u32_const(exn_addr)
+        .u32_const(exn_len as u32)
+        .call(puts);
+
+    flush
+        .global_get(globals.exn)
+        .call(puti);
+
+    // print "\ngc: "
+    flush
+        .u32_const(gc_addr)
+        .u32_const(gc_len as u32)
+        .call(puts);
+
+    flush
+        .global_get(globals.gc)
+        .call(puti);
+
+    // print "\natomic: "
+    flush
+        .u32_const(atomic_addr)
+        .u32_const(atomic_len as u32)
+        .call(puts);
+
+    flush
+        .global_get(globals.atomic)
+        .call(puti);
+
+    // print "\n: "
+    flush
+        .u32_const(newline_addr)
+        .u32_const(newline_len as u32)
+        .call(puts);
+
+    let flush_id = flush.finish_module(wasm);
+    wasm.set_fn_name(flush_id, "flush_on_exit".to_string());
+
+    flush_id
 }
 
 fn inject_instrumentation(wasm: &mut ModuleIterator, globals: &Globals) {

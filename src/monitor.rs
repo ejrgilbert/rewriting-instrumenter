@@ -2,13 +2,21 @@ mod imix;
 mod cache;
 mod branch;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Error;
 use std::path::{Path, PathBuf};
-use orca_wasm::ir::id::GlobalID;
-use orca_wasm::ir::types::{InitExpr, Value};
-use orca_wasm::{DataType, Instructions, Module};
+use orca_wasm::ir::id::{FunctionID, GlobalID, LocalID, MemoryID};
+use orca_wasm::ir::types::{BlockType, InitExpr};
+use orca_wasm::{DataSegment, DataSegmentKind, DataType, Instructions, Module, Opcode};
+use orca_wasm::ir::function::FunctionBuilder;
+use orca_wasm::ir::module::module_functions::{FuncKind, ImportedFunction, LocalFunction};
+use orca_wasm::ir::types::Value::I32;
+use orca_wasm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
+use orca_wasm::iterator::module_iterator::ModuleIterator;
 use orca_wasm::module_builder::AddLocal;
+use orca_wasm::opcode::Instrumenter;
+use wasmparser::{MemArg, MemoryType, Operator};
+use crate::monitor::branch::WASM_PAGE_SIZE;
 
 pub enum Monitor {
     IMix,
@@ -52,7 +60,7 @@ fn write_module(mut module: Module, monitor_name: &str, path: &Path) -> Result<(
 
 pub fn add_global(wasm: &mut Module) -> GlobalID {
     wasm.add_global(
-        InitExpr::new(vec![Instructions::Value(Value::I32(0))]),
+        InitExpr::new(vec![Instructions::Value(I32(0))]),
         DataType::I32,
         true,
         false,
@@ -106,5 +114,290 @@ impl LocalsTracker {
     pub fn reset_function(&mut self) {
         self.available.clear();
         self.in_use.clear();
+    }
+}
+
+struct MemTracker {
+    curr_mem_offset: u32,
+    var_start_offset: u32,
+    mem_id: u32,
+
+    allocated_vars: Vec<AllocatedVar>,
+    strings: HashMap<String, u32>
+}
+impl MemTracker {
+    fn new(strs_to_emit: Vec<String>, wasm: &mut Module) -> Self {
+        let mem_id = *wasm.add_local_memory(MemoryType {
+            memory64: false,
+            shared: false,
+            initial: 1,
+            maximum: None,
+            page_size_log2: None,
+        });
+        wasm.exports.add_export_mem("instrumentation_mem".to_string(), mem_id);
+
+        // go ahead and set up the needed strings so that they live at
+        // memory offset 0!
+        let (strings, curr_mem_offset) = setup_strings(strs_to_emit, mem_id, wasm);
+
+        Self {
+            curr_mem_offset,
+            var_start_offset: curr_mem_offset,
+            mem_id,
+            allocated_vars: Vec::default(),
+            strings
+        }
+    }
+
+    pub(crate) fn memory_grow(&mut self, wasm: &mut Module) {
+        // If we've allocated any memory, bump the app's memory up to account for that
+        if let Some(mem) = wasm.memories.get_mut(MemoryID(self.mem_id)) {
+            let req_pages = ((self.curr_mem_offset / WASM_PAGE_SIZE) + 1) as u64;
+            if mem.ty.initial < req_pages {
+                mem.ty.initial = req_pages;
+            }
+        }
+    }
+    pub fn setup_module(&mut self, wasm: &mut Module) {
+        self.alloc_vars_segments(wasm);
+    }
+    pub fn get_str(&self, str: &str) -> (u32, usize) {
+        if let Some(offset) = self.strings.get(str) {
+            (*offset, str.len())
+        } else {
+            // create a data segment for the new string
+
+            panic!("couldn't find string: {str}")
+        }
+    }
+    pub fn alloc_var(&mut self, fid: u32, pc: u32, n: u32) -> u32 {
+        let mem_offset = self.curr_mem_offset;
+        let allocated_var = AllocatedVar {
+            fid,
+            pc,
+            n
+        };
+
+        let len = allocated_var.num_bytes() as u32;
+        self.allocated_vars.push(allocated_var);
+        self.curr_mem_offset += len;
+        mem_offset
+    }
+    fn alloc_vars_segments(&mut self, wasm: &mut Module) {
+        // write the allocated vars to memory
+        let mut bytes = vec![];
+        for var in self.allocated_vars.iter() {
+            bytes.extend(&var.encode());
+        }
+        add_data_segment(bytes, self.mem_id, self.var_start_offset, wasm);
+        // (size already accounted for in self.curr_mem_offset)
+    }
+}
+struct AllocatedVar {
+    fid: u32,
+    pc: u32,
+    // n is the number of entries in the table including the default target
+    n: u32,
+}
+impl AllocatedVar {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut res = self.fid.to_le_bytes().to_vec();
+        res.extend(self.pc.to_le_bytes());
+        res.extend(self.n.to_le_bytes());
+
+        // zero padding for value slots based on N
+        for _ in 0..self.n {
+            res.extend(0_i64.to_le_bytes());
+        }
+        assert_eq!(self.num_bytes(), res.len());
+
+        res
+    }
+    fn num_bytes(&self) -> usize {
+        // 0      4      8      12        20
+        // | fid  |  pc  |   n  |  0 taken |   ...  | n taken |
+        Self::full_header_size() +
+            (self.n as usize * size_of::<u64>())
+    }
+    fn loc_header_size() -> usize {
+        size_of::<u32>() +
+            size_of::<u32>()
+    }
+    fn full_header_size() -> usize {
+        Self::loc_header_size() +
+            size_of::<u32>()
+    }
+}
+fn setup_strings(to_emit: Vec<String>, mem_id: u32, wasm: &mut Module) -> (HashMap<String, u32>, u32) {
+    // not using self's memory offset, so we can start back at zero for the actual data segment injections
+    // since the allocated vars are in a vector, we can depend on the ordering being correct
+    // this is to keep from having a ton of data segments created. We just make a single large one for allocated variables.
+    let mut mem_offset = 0;
+    let mut strings = HashMap::new();
+    for str in to_emit.iter() {
+        let (addr, len) = add_data_segment(str.as_bytes().to_vec(), mem_id, mem_offset, wasm);
+        mem_offset += len;
+        strings.insert(str.to_string(), addr);
+    }
+
+    (strings, mem_offset)
+}
+fn add_data_segment(bytes: Vec<u8>, mem_id: u32, target_offset: u32, wasm: &mut Module) -> (u32, u32) {
+    let len = bytes.len() as u32;
+    let data = DataSegment {
+        data: bytes,
+        kind: DataSegmentKind::Active {
+            memory_index: mem_id,
+            offset_expr: InitExpr::new(vec![Instructions::Value(I32(target_offset as i32))]),
+        },
+    };
+    wasm.add_data(data);
+
+    (target_offset, len)
+}
+
+
+fn add_util_funcs(memory: &mut MemTracker, wasm: &mut Module) -> HashMap<String, FunctionID> {
+    let host_funcs = [("whamm_core", "puti32", vec![DataType::I32], vec![]), ("whamm_core", "putc", vec![DataType::I32], vec![])];
+
+    let mut utils = HashMap::new();
+    for (module, name, params, results) in host_funcs.iter() {
+        let ty_id = wasm.types.add_func_type(params, results);
+        let (fid, imp_id) = wasm.add_import_func(module.to_string(), name.to_string(), ty_id);
+        wasm.imports.set_name(name.to_string(), imp_id);
+
+        utils.insert(name.to_string(), fid);
+    }
+
+    let puts_fid = emit_puts(memory, &utils, wasm);
+    utils.insert("puts".to_string(), puts_fid);
+
+    utils
+}
+
+fn emit_puts(memory: &mut MemTracker, utils: &HashMap<String, FunctionID>, wasm: &mut Module) -> FunctionID {
+    let start_addr = LocalID(0);
+    let len = LocalID(1);
+    let mut puts = FunctionBuilder::new(&[DataType::I32, DataType::I32], &[]);
+
+    let i = puts.add_local(DataType::I32);
+    let Some(putc) = utils.get("putc") else {
+        panic!("Couldn't find function for 'putc'");
+    };
+    let putc = *putc;
+
+    #[rustfmt::skip]
+    puts.loop_stmt(BlockType::Empty)
+        // Check if we've reached the end of the string
+        .local_get(i)
+        .local_get(len)
+        .i32_lt_unsigned()
+        .i32_eqz()
+        .br_if(1)
+
+        // get next char
+        .local_get(start_addr)
+        .local_get(i)
+        .i32_add()
+        // load a byte from memory
+        .i32_load8_u(
+            MemArg {
+                align: 0,
+                max_align: 0,
+                offset: 0,
+                memory: memory.mem_id
+            }
+        );
+
+    puts.call(putc);
+
+    // Increment i and continue loop
+    puts.local_get(i)
+        .i32_const(1)
+        .i32_add()
+        .local_set(i)
+        .br(0) // (;3;)
+        .end();
+
+    let puts_fid = puts.finish_module(wasm);
+    wasm.set_fn_name(puts_fid, "puts".to_string());
+
+    puts_fid
+}
+fn call_flush_on_exit(flush_fn: FunctionID, wasm: &mut Module) {
+    // handles:
+    // - start/main func::exit
+    // - wasi exit calls!
+    inject_flush_on_end(flush_fn, wasm);
+    inject_flush_on_wasi_exit_calls(flush_fn, wasm);
+}
+
+fn inject_flush_on_end(flush_fn: FunctionID, wasm: &mut Module) {
+    let fid = if let Some(main_fid) = wasm
+        .exports
+        .get_func_by_name("main".to_string())
+    {
+        main_fid
+    } else if let Some(main_fid) = wasm
+        .exports
+        .get_func_by_name("_start".to_string())
+    {
+        main_fid
+    } else if let Some(start_fid) = wasm.start {
+        start_fid
+    } else {
+        unimplemented!("Your target Wasm has no main or start function...we do not support flushing state variables in this scenario.")
+    };
+    let mut main = wasm.functions.get_fn_modifier(fid).unwrap();
+
+    main.func_exit();
+    main.call(flush_fn);
+    main.finish_instr();
+}
+
+fn inject_flush_on_wasi_exit_calls(flush_fn: FunctionID, wasm: &mut Module) {
+    let mut iter = ModuleIterator::new(wasm, &vec![]);
+    loop {
+        if let Some(op) = iter.curr_op() {
+            if is_prog_exit_call(op, iter.module) {
+                // This is an exiting WASI function call, flush first!
+                iter.before();
+                iter.call(flush_fn);
+                iter.finish_instr();
+            }
+        }
+
+        if iter.next().is_none() {
+            break;
+        };
+    }
+}
+
+fn is_prog_exit_call(opcode: &Operator, wasm: &Module) -> bool {
+    match opcode {
+        Operator::Call {function_index: fid} |
+        Operator::ReturnCall {
+            function_index: fid
+        } => {
+            let target = match wasm.functions.get_kind(FunctionID(*fid)) {
+                FuncKind::Import(ImportedFunction { import_id, .. }) => {
+                    let import = wasm.imports.get(*import_id);
+                    let mod_name = import.module.to_string();
+                    let func_name = import.name.to_string();
+                    format!("{mod_name}:{func_name}")
+                }
+                FuncKind::Local(LocalFunction { func_id, .. }) => {
+                    let mod_name = match &wasm.module_name {
+                        Some(name) => name.clone(),
+                        None => "".to_string(),
+                    };
+                    let func_name = wasm.functions.get_name(*func_id).clone().unwrap_or_default();
+                    format!("{mod_name}:{func_name}")
+                }
+            };
+            let exiting_call = HashSet::from(["wasi_snapshot_preview1:proc_exit".to_string()]);
+            exiting_call.contains(&target)
+        }
+        _ => false,
     }
 }

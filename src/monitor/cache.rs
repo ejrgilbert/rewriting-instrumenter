@@ -1,21 +1,81 @@
+use std::collections::HashMap;
 use orca_wasm::ir::id::{FunctionID, GlobalID, LocalID};
 use orca_wasm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
 use orca_wasm::iterator::module_iterator::ModuleIterator;
 use orca_wasm::{DataType, Location, Module, Opcode};
 use orca_wasm::DataType::{F32, F64, I32, I64};
+use orca_wasm::ir::function::FunctionBuilder;
 use orca_wasm::opcode::MacroOpcode;
 use wasmparser::{MemArg, Operator};
-use crate::monitor::{add_global, LocalsTracker};
+use crate::monitor::{add_global, add_util_funcs, call_flush_on_exit, LocalsTracker, MemTracker};
 
 pub fn instrument(mut wasm: Module) -> Module {
     let globals = Globals::new(&mut wasm);
     let mut locals = LocalsTracker::default();
+    let mut memory = MemTracker::new(vec!["\nhit: ".to_string(), "\nmiss: ".to_string(), "\n".to_string()], &mut wasm);
     let check_access = import_lib(&mut wasm);
     let mut mod_it = ModuleIterator::new(&mut wasm, &vec![]);
 
     inject_instrumentation(&mut mod_it, &mut locals, &globals, check_access);
+    flush(&globals, &mut memory, &mut wasm);
+    // make sure the memory is large enough!
+    memory.memory_grow(&mut wasm);
 
     wasm
+}
+
+fn flush(globals: &Globals, memory: &mut MemTracker, wasm: &mut Module) {
+    let utils = add_util_funcs(memory, wasm);
+    let flush_fn = emit_flush_fn(globals, memory, &utils, wasm);
+    call_flush_on_exit(flush_fn, wasm)
+}
+
+fn emit_flush_fn(globals: &Globals, memory: &mut MemTracker, utils: &HashMap<String, FunctionID>, wasm: &mut Module) -> FunctionID {
+    let mut flush = FunctionBuilder::new(&[], &[]);
+
+    let Some(puts) = utils.get("puts") else {
+        panic!("could not find puts hostfunc")
+    };
+    let puts = *puts;
+    let Some(puti) = utils.get("puti32") else {
+        panic!("could not find puti hostfunc")
+    };
+    let puti = *puti;
+
+    let (hit_addr, hit_len) = memory.get_str("\nhit: ");
+    let (miss_addr, miss_len) = memory.get_str("\nmiss: ");
+    let (newline_addr, newline_len) = memory.get_str("\n");
+
+    // print "\nhit: "
+    flush
+        .u32_const(hit_addr)
+        .u32_const(hit_len as u32)
+        .call(puts);
+
+    flush
+        .global_get(globals.hit)
+        .call(puti);
+
+    // print "\nmiss: "
+    flush
+        .u32_const(miss_addr)
+        .u32_const(miss_len as u32)
+        .call(puts);
+
+    flush
+        .global_get(globals.miss)
+        .call(puti);
+
+    // print "\n: "
+    flush
+        .u32_const(newline_addr)
+        .u32_const(newline_len as u32)
+        .call(puts);
+
+    let flush_id = flush.finish_module(wasm);
+    wasm.set_fn_name(flush_id, "flush_on_exit".to_string());
+
+    flush_id
 }
 
 fn inject_instrumentation(wasm: &mut ModuleIterator, locals: &mut LocalsTracker, globals: &Globals, check_access: FunctionID) {
