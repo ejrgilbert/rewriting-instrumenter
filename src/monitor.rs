@@ -2,6 +2,7 @@ mod branch;
 mod cache;
 mod hotness;
 mod imix;
+mod mem_access;
 
 use orca_wasm::ir::function::FunctionBuilder;
 use orca_wasm::ir::id::{FunctionID, GlobalID, LocalID, MemoryID};
@@ -25,6 +26,7 @@ pub enum Monitor {
     Cache,
     Branch,
     Hotness,
+    MemAccess
 }
 
 impl Monitor {
@@ -34,6 +36,7 @@ impl Monitor {
             Monitor::Cache => "cache-sim",
             Monitor::Branch => "branches",
             Monitor::Hotness => "hotness",
+            Monitor::MemAccess => "mem-access",
         }
     }
 }
@@ -46,6 +49,7 @@ pub fn add_monitor(module: Module, monitor: Monitor, path: &Path) -> Result<(), 
         Monitor::Cache => cache::instrument(module),
         Monitor::Branch => branch::instrument(module),
         Monitor::Hotness => hotness::instrument(module),
+        Monitor::MemAccess => mem_access::instrument(module),
     };
 
     write_module(instrumented_module, monitor.name(), path)

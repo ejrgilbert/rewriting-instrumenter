@@ -20,6 +20,7 @@ fn main() -> Result<(), anyhow::Error> {
         "cache-sim" => Monitor::Cache,
         "branches" => Monitor::Branch,
         "hotness" => Monitor::Hotness,
+        "mem-access" => Monitor::MemAccess,
         name => bail!("Invalid monitor {}", name),
     };
 
