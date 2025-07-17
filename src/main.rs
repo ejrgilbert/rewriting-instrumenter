@@ -22,6 +22,7 @@ fn main() -> Result<(), anyhow::Error> {
         "hotness" => Monitor::Hotness,
         "mem-access" => Monitor::MemAccess,
         "loop-tracer" => Monitor::LoopTracer,
+        "call-graph" => Monitor::CallGraph,
         name => bail!("Invalid monitor {}", name),
     };
 
