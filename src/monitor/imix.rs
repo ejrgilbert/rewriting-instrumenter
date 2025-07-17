@@ -1,12 +1,12 @@
 use crate::monitor::{add_global, add_util_funcs, call_flush_on_exit, MemTracker};
-use orca_wasm::ir::function::FunctionBuilder;
-use orca_wasm::ir::id::{FunctionID, GlobalID};
-use orca_wasm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
-use orca_wasm::iterator::module_iterator::ModuleIterator;
-use orca_wasm::opcode::MacroOpcode;
-use orca_wasm::{Module, Opcode};
 use std::collections::HashMap;
 use wasmparser::Operator;
+use wirm::ir::function::FunctionBuilder;
+use wirm::ir::id::{FunctionID, GlobalID};
+use wirm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
+use wirm::iterator::module_iterator::ModuleIterator;
+use wirm::opcode::MacroOpcode;
+use wirm::{Module, Opcode};
 
 struct Globals {
     _const: GlobalID,

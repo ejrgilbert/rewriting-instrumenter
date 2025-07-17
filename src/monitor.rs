@@ -2,23 +2,23 @@ mod branch;
 mod cache;
 mod hotness;
 mod imix;
-mod mem_access;
 mod loop_tracer;
+mod mem_access;
 
-use orca_wasm::ir::function::FunctionBuilder;
-use orca_wasm::ir::id::{FunctionID, GlobalID, LocalID, MemoryID};
-use orca_wasm::ir::module::module_functions::{FuncKind, ImportedFunction, LocalFunction};
-use orca_wasm::ir::types::Value::I32;
-use orca_wasm::ir::types::{BlockType, InitExpr};
-use orca_wasm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
-use orca_wasm::iterator::module_iterator::ModuleIterator;
-use orca_wasm::module_builder::AddLocal;
-use orca_wasm::opcode::{Instrumenter, MacroOpcode};
-use orca_wasm::{DataSegment, DataSegmentKind, DataType, Instructions, Module, Opcode};
 use std::collections::{HashMap, HashSet};
 use std::io::Error;
 use std::path::{Path, PathBuf};
 use wasmparser::{MemArg, MemoryType, Operator};
+use wirm::ir::function::FunctionBuilder;
+use wirm::ir::id::{FunctionID, GlobalID, LocalID, MemoryID};
+use wirm::ir::module::module_functions::{FuncKind, ImportedFunction};
+use wirm::ir::types::Value::I32;
+use wirm::ir::types::{BlockType, InitExpr};
+use wirm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
+use wirm::iterator::module_iterator::ModuleIterator;
+use wirm::module_builder::AddLocal;
+use wirm::opcode::{Instrumenter, MacroOpcode};
+use wirm::{DataSegment, DataSegmentKind, DataType, InitInstr, Module, Opcode};
 
 pub const WASM_PAGE_SIZE: u32 = 65_536;
 
@@ -28,7 +28,7 @@ pub enum Monitor {
     Branch,
     Hotness,
     MemAccess,
-    LoopTracer
+    LoopTracer,
 }
 
 impl Monitor {
@@ -39,7 +39,7 @@ impl Monitor {
             Monitor::Branch => "branches",
             Monitor::Hotness => "hotness",
             Monitor::MemAccess => "mem-access",
-            Monitor::LoopTracer => "loop-tracer"
+            Monitor::LoopTracer => "loop-tracer",
         }
     }
 }
@@ -72,7 +72,7 @@ fn write_module(mut module: Module, monitor_name: &str, path: &Path) -> Result<(
 
 pub fn add_global(wasm: &mut Module) -> GlobalID {
     wasm.add_global(
-        InitExpr::new(vec![Instructions::Value(I32(0))]),
+        InitExpr::new(vec![InitInstr::Value(I32(0))]),
         DataType::I32,
         true,
         false,
@@ -205,6 +205,15 @@ impl MemTracker {
         self.curr_mem_offset += len;
         mem_offset
     }
+    pub fn alloc_i32_var(&mut self) -> u32 {
+        let mem_offset = self.curr_mem_offset;
+        let allocated_var = AllocatedVar::SingleI32;
+
+        let len = allocated_var.num_bytes() as u32;
+        self.allocated_vars.push(allocated_var);
+        self.curr_mem_offset += len;
+        mem_offset
+    }
     fn alloc_vars_segments(&mut self, wasm: &mut Module) {
         // write the allocated vars to memory
         let mut bytes = vec![];
@@ -262,6 +271,9 @@ impl MultiCountHeader {
 }
 
 enum AllocatedVar {
+    // 0      4
+    // | i32  |
+    SingleI32,
     // 0      4      8      16
     // | fid  |  pc  | count |
     SingleCount { header: SingleCountHeader },
@@ -272,6 +284,12 @@ enum AllocatedVar {
 impl AllocatedVar {
     pub fn encode(&self) -> Vec<u8> {
         match self {
+            Self::SingleI32 => {
+                let res = 0_i32.to_le_bytes().to_vec();
+                assert_eq!(self.num_bytes(), res.len());
+
+                res
+            }
             Self::SingleCount { header } => {
                 let mut res = header.encode();
                 // zero padding for single value slot
@@ -294,6 +312,7 @@ impl AllocatedVar {
     }
     fn num_bytes(&self) -> usize {
         match self {
+            AllocatedVar::SingleI32 => size_of::<i32>(),
             AllocatedVar::SingleCount { .. } => self.full_header_size() + size_of::<u64>(),
             AllocatedVar::MultiCount {
                 header: MultiCountHeader { n, .. },
@@ -302,6 +321,7 @@ impl AllocatedVar {
     }
     pub fn full_header_size(&self) -> usize {
         match self {
+            AllocatedVar::SingleI32 => 0,
             AllocatedVar::SingleCount { .. } => SingleCountHeader::num_bytes(),
             AllocatedVar::MultiCount { .. } => MultiCountHeader::num_bytes(),
         }
@@ -336,8 +356,9 @@ fn add_data_segment(
         data: bytes,
         kind: DataSegmentKind::Active {
             memory_index: mem_id,
-            offset_expr: InitExpr::new(vec![Instructions::Value(I32(target_offset as i32))]),
+            offset_expr: InitExpr::new(vec![InitInstr::Value(I32(target_offset as i32))]),
         },
+        tag: None,
     };
     wasm.add_data(data);
 
@@ -476,14 +497,14 @@ fn is_prog_exit_call(opcode: &Operator, wasm: &Module) -> bool {
                     let func_name = import.name.to_string();
                     format!("{mod_name}:{func_name}")
                 }
-                FuncKind::Local(LocalFunction { func_id, .. }) => {
+                FuncKind::Local(local_func) => {
                     let mod_name = match &wasm.module_name {
                         Some(name) => name.clone(),
                         None => "".to_string(),
                     };
                     let func_name = wasm
                         .functions
-                        .get_name(*func_id)
+                        .get_name(local_func.func_id)
                         .clone()
                         .unwrap_or_default();
                     format!("{mod_name}:{func_name}")
@@ -495,7 +516,13 @@ fn is_prog_exit_call(opcode: &Operator, wasm: &Module) -> bool {
         _ => false,
     }
 }
-fn import_lib_func(lib_name: &str, lib_func: &str, params: &[DataType], results: &[DataType], wasm: &mut Module) -> FunctionID {
+fn import_lib_func(
+    lib_name: &str,
+    lib_func: &str,
+    params: &[DataType],
+    results: &[DataType],
+    wasm: &mut Module,
+) -> FunctionID {
     let ty_id = wasm.types.add_func_type(params, results);
     let (fid, imp_id) = wasm.add_import_func(lib_name.to_string(), lib_func.to_string(), ty_id);
     wasm.imports.set_name(lib_func.to_string(), imp_id);

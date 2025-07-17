@@ -2,17 +2,17 @@ use crate::monitor::branch::Case::{NoMatch, SimpleBranch, Table};
 use crate::monitor::{
     add_util_funcs, call_flush_on_exit, LocalsTracker, MemTracker, MultiCountHeader,
 };
-use orca_wasm::ir::function::FunctionBuilder;
-use orca_wasm::ir::id::{FunctionID, LocalID};
-use orca_wasm::ir::types::BlockType;
-use orca_wasm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
-use orca_wasm::iterator::module_iterator::ModuleIterator;
-use orca_wasm::module_builder::AddLocal;
-use orca_wasm::opcode::MacroOpcode;
-use orca_wasm::DataType::I32;
-use orca_wasm::{Location, Module, Opcode};
 use std::collections::HashMap;
 use wasmparser::{MemArg, Operator};
+use wirm::ir::function::FunctionBuilder;
+use wirm::ir::id::{FunctionID, LocalID};
+use wirm::ir::types::BlockType;
+use wirm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
+use wirm::iterator::module_iterator::ModuleIterator;
+use wirm::module_builder::AddLocal;
+use wirm::opcode::MacroOpcode;
+use wirm::DataType::I32;
+use wirm::{Location, Module, Opcode};
 
 pub fn instrument(mut wasm: Module) -> Module {
     let mut locals = LocalsTracker::default();
