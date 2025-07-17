@@ -12,7 +12,7 @@ use orca_wasm::ir::types::{BlockType, InitExpr};
 use orca_wasm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
 use orca_wasm::iterator::module_iterator::ModuleIterator;
 use orca_wasm::module_builder::AddLocal;
-use orca_wasm::opcode::Instrumenter;
+use orca_wasm::opcode::{Instrumenter, MacroOpcode};
 use orca_wasm::{DataSegment, DataSegmentKind, DataType, Instructions, Module, Opcode};
 use std::collections::{HashMap, HashSet};
 use std::io::Error;
@@ -489,5 +489,54 @@ fn is_prog_exit_call(opcode: &Operator, wasm: &Module) -> bool {
             exiting_call.contains(&target)
         }
         _ => false,
+    }
+}
+fn import_lib_func(lib_name: &str, lib_func: &str, params: &[DataType], results: &[DataType], wasm: &mut Module) -> FunctionID {
+    let ty_id = wasm.types.add_func_type(params, results);
+    let (fid, imp_id) = wasm.add_import_func(lib_name.to_string(), lib_func.to_string(), ty_id);
+    wasm.imports.set_name(lib_func.to_string(), imp_id);
+
+    fid
+}
+
+
+
+/// Returns values in the order that they should be replaced on the stack!
+fn bundle_load_store_args(
+    val_dt: Option<DataType>,
+    static_offset: u64,
+    wasm: &mut ModuleIterator,
+    locals: &mut LocalsTracker,
+) -> Vec<LocalID> {
+    let orig_stack_vals;
+
+    let addr = if let Some(dt) = val_dt {
+        let addr = LocalID(locals.use_local(DataType::I32, wasm));
+        let val = LocalID(locals.use_local(dt, wasm));
+
+        wasm.local_set(val).local_set(addr);
+
+        orig_stack_vals = vec![addr, val];
+        addr
+    } else {
+        let addr = LocalID(locals.use_local(DataType::I32, wasm));
+
+        wasm.local_set(addr);
+
+        orig_stack_vals = vec![addr];
+        addr
+    };
+
+    // the effective address
+    wasm.local_get(addr);
+    if static_offset > 0 {
+        wasm.u32_const(static_offset as u32).i32_add();
+    }
+
+    orig_stack_vals
+}
+fn fix_stack(wasm: &mut ModuleIterator, orig_stack_vals: &Vec<LocalID>) {
+    for local in orig_stack_vals {
+        wasm.local_get(*local);
     }
 }

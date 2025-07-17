@@ -1,4 +1,4 @@
-use crate::monitor::{add_global, add_util_funcs, call_flush_on_exit, LocalsTracker, MemTracker};
+use crate::monitor::{add_global, add_util_funcs, bundle_load_store_args, call_flush_on_exit, fix_stack, import_lib_func, LocalsTracker, MemTracker};
 use orca_wasm::ir::function::FunctionBuilder;
 use orca_wasm::ir::id::{FunctionID, GlobalID, LocalID};
 use orca_wasm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
@@ -222,14 +222,7 @@ fn inject_instrumentation(
 }
 
 fn import_lib(wasm: &mut Module) -> FunctionID {
-    let lib_name = "cache";
-    let lib_func = "check_access";
-
-    let ty_id = wasm.types.add_func_type(&[I32, I32], &[I32]);
-    let (fid, imp_id) = wasm.add_import_func(lib_name.to_string(), lib_func.to_string(), ty_id);
-    wasm.imports.set_name(lib_func.to_string(), imp_id);
-
-    fid
+    import_lib_func("cache", "check_access", &[I32, I32], &[I32], wasm)
 }
 
 fn perform_cache_lookup(
@@ -243,51 +236,15 @@ fn perform_cache_lookup(
 ) {
     wasm.before();
 
-    let orig_stack_vals = bundle_args(val_dt, static_offset, num_bytes, wasm, locals);
+    let orig_stack_vals = bundle_load_store_args(val_dt, static_offset, wasm, locals);
+
+    // the size of the data being accessed
+    wasm.u32_const(num_bytes);
 
     call_cache(wasm, check_access);
     decode_result(wasm, locals, globals);
 
     fix_stack(wasm, &orig_stack_vals);
-}
-
-/// Returns values in the order that they should be replaced on the stack!
-fn bundle_args(
-    val_dt: Option<DataType>,
-    static_offset: u64,
-    data_size: u32,
-    wasm: &mut ModuleIterator,
-    locals: &mut LocalsTracker,
-) -> Vec<LocalID> {
-    let orig_stack_vals;
-
-    let addr = if let Some(dt) = val_dt {
-        let addr = LocalID(locals.use_local(I32, wasm));
-        let val = LocalID(locals.use_local(dt, wasm));
-
-        wasm.local_set(val).local_set(addr);
-
-        orig_stack_vals = vec![addr, val];
-        addr
-    } else {
-        let addr = LocalID(locals.use_local(I32, wasm));
-
-        wasm.local_set(addr);
-
-        orig_stack_vals = vec![addr];
-        addr
-    };
-
-    // the effective address
-    wasm.local_get(addr);
-    if static_offset > 0 {
-        wasm.u32_const(static_offset as u32).i32_add();
-    }
-
-    // the size of the data being accessed
-    wasm.u32_const(data_size);
-
-    orig_stack_vals
 }
 
 fn call_cache(wasm: &mut ModuleIterator, check_access: FunctionID) {
@@ -325,11 +282,6 @@ fn decode_result(wasm: &mut ModuleIterator, locals: &mut LocalsTracker, globals:
         .local_get(misses)
         .i32_add()
         .global_set(globals.miss);
-}
-fn fix_stack(wasm: &mut ModuleIterator, orig_stack_vals: &Vec<LocalID>) {
-    for local in orig_stack_vals {
-        wasm.local_get(*local);
-    }
 }
 
 struct Globals {

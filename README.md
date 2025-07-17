@@ -12,7 +12,9 @@ This was implemented as part of an experiment comparing various instrumentation 
 
 - **Instruction Mix monitor**: Instruments all opcodes and counts the number of times each category of monitor is executed dynamically.
 
-- **Cache Simulator monitor**: Simulates a cache by performing a cache lookup at each `load`/`store` Wasm opcode.
+- **Cache Simulator monitor**: Simulates a cache by performing a cache lookup at each `load`/`store` Wasm opcode. Must be run with the [cache_simulator](https://github.com/ejrgilbert/whamm/tree/master/user_libs/cache) and [whamm_core](https://github.com/ejrgilbert/whamm/tree/master/whamm_core) libraries.
+
+- **Memory Access Tracer**: Traces the memory accesses that the application performs and tracks the number of times a specific address is accessed along with whether it was a write operation. Must be run with the [whamm_core](https://github.com/ejrgilbert/whamm/tree/master/whamm_core) library.
 
 ### Usage
 
