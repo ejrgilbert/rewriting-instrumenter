@@ -16,6 +16,8 @@ This was implemented as part of an experiment comparing various instrumentation 
 
 - **Memory Access Tracer**: Traces the memory accesses that the application performs and tracks the number of times a specific address is accessed along with whether it was a write operation. Must be run with the [whamm_core](https://github.com/ejrgilbert/whamm/tree/master/whamm_core) library.
 
+- **Loop Tracer**: Tallies counts of program trace that form loops.. Must be run with the [loop tracer](https://github.com/ejrgilbert/whamm/blob/master/user_libs/loop_tracer/tracer.wasm) and [whamm_core](https://github.com/ejrgilbert/whamm/tree/master/whamm_core) libraries.
+
 ### Usage
 
 ```bash

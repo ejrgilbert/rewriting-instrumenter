@@ -1,13 +1,16 @@
-use crate::monitor::{add_global, add_util_funcs, bundle_load_store_args, call_flush_on_exit, fix_stack, import_lib_func, LocalsTracker, MemTracker};
-use orca_wasm::ir::function::FunctionBuilder;
-use orca_wasm::ir::id::{FunctionID, GlobalID, LocalID};
-use orca_wasm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
-use orca_wasm::iterator::module_iterator::ModuleIterator;
-use orca_wasm::opcode::MacroOpcode;
-use orca_wasm::DataType::{F32, F64, I32, I64};
-use orca_wasm::{DataType, Location, Module, Opcode};
+use crate::monitor::{
+    add_global, add_util_funcs, bundle_load_store_args, call_flush_on_exit, fix_stack,
+    import_lib_func, LocalsTracker, MemTracker,
+};
 use std::collections::HashMap;
 use wasmparser::{MemArg, Operator};
+use wirm::ir::function::FunctionBuilder;
+use wirm::ir::id::{FunctionID, GlobalID, LocalID};
+use wirm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
+use wirm::iterator::module_iterator::ModuleIterator;
+use wirm::opcode::MacroOpcode;
+use wirm::DataType::{F32, F64, I32, I64};
+use wirm::{DataType, Location, Module, Opcode};
 
 pub fn instrument(mut wasm: Module) -> Module {
     let globals = Globals::new(&mut wasm);
