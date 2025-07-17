@@ -3,6 +3,7 @@ mod cache;
 mod hotness;
 mod imix;
 mod mem_access;
+mod loop_tracer;
 
 use orca_wasm::ir::function::FunctionBuilder;
 use orca_wasm::ir::id::{FunctionID, GlobalID, LocalID, MemoryID};
@@ -26,7 +27,8 @@ pub enum Monitor {
     Cache,
     Branch,
     Hotness,
-    MemAccess
+    MemAccess,
+    LoopTracer
 }
 
 impl Monitor {
@@ -37,6 +39,7 @@ impl Monitor {
             Monitor::Branch => "branches",
             Monitor::Hotness => "hotness",
             Monitor::MemAccess => "mem-access",
+            Monitor::LoopTracer => "loop-tracer"
         }
     }
 }
@@ -50,6 +53,7 @@ pub fn add_monitor(module: Module, monitor: Monitor, path: &Path) -> Result<(), 
         Monitor::Branch => branch::instrument(module),
         Monitor::Hotness => hotness::instrument(module),
         Monitor::MemAccess => mem_access::instrument(module),
+        Monitor::LoopTracer => loop_tracer::instrument(module),
     };
 
     write_module(instrumented_module, monitor.name(), path)
@@ -498,8 +502,6 @@ fn import_lib_func(lib_name: &str, lib_func: &str, params: &[DataType], results:
 
     fid
 }
-
-
 
 /// Returns values in the order that they should be replaced on the stack!
 fn bundle_load_store_args(

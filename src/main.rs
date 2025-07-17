@@ -21,6 +21,7 @@ fn main() -> Result<(), anyhow::Error> {
         "branches" => Monitor::Branch,
         "hotness" => Monitor::Hotness,
         "mem-access" => Monitor::MemAccess,
+        "loop-tracer" => Monitor::LoopTracer,
         name => bail!("Invalid monitor {}", name),
     };
 
