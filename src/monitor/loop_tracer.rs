@@ -37,6 +37,7 @@ fn inject_instrumentation(
     locals: &mut LocalsTracker,
     tracer: &Tracer,
 ) {
+    let mut first_func: bool = true;
     let (mut curr_fid, curr_pc) = if let Location::Module {
         func_idx,
         instr_idx,
@@ -49,11 +50,12 @@ fn inject_instrumentation(
     };
     loop {
         if let Location::Module { func_idx, .. } = wasm.curr_loc().0 {
-            if curr_fid != func_idx {
+            if first_func || curr_fid != func_idx {
                 // This is the first time we're visiting this new function
                 // reset state
                 locals.reset_function();
                 curr_fid = func_idx;
+                first_func = false;
 
                 // inject a function entry probe
                 wasm.func_entry();

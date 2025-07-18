@@ -179,6 +179,7 @@ fn inject_instrumentation(
     locals: &mut LocalsTracker,
     memory: &mut MemTracker,
 ) {
+    let mut first_func: bool = true;
     let mut curr_fid = if let Location::Module { func_idx, .. } = wasm.curr_loc().0 {
         func_idx
     } else {
@@ -196,9 +197,10 @@ fn inject_instrumentation(
             else {
                 panic!("non-module locations are not supported")
             };
-            if curr_fid != func_idx {
+            if first_func || curr_fid != func_idx {
                 locals.reset_function();
                 curr_fid = func_idx;
+                first_func = false;
             }
             let case = match op {
                 Operator::If { .. } | Operator::BrIf { .. } => SimpleBranch,
