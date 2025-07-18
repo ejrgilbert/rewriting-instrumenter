@@ -1,5 +1,7 @@
 #![allow(dead_code)] // for BasicBlockState::get_instr_cnt
-use crate::monitor::{add_util_funcs, call_flush_on_exit, is_prog_exit_call, MemTracker, SingleCountHeader};
+use crate::monitor::{
+    add_util_funcs, call_flush_on_exit, is_prog_exit_call, FuncLocHeader, MemTracker,
+};
 use std::collections::HashMap;
 use wasmparser::{MemArg, Operator};
 use wirm::ir::function::FunctionBuilder;
@@ -148,10 +150,7 @@ fn inject_instrumentation(wasm: &mut ModuleIterator, memory: &mut MemTracker) {
     let mut block_state = BasicBlockState::default();
 
     let mut first_func: bool = true;
-    let mut curr_fid = if let Location::Module {
-        func_idx, ..
-    } = wasm.curr_loc().0
-    {
+    let mut curr_fid = if let Location::Module { func_idx, .. } = wasm.curr_loc().0 {
         func_idx
     } else {
         panic!("we don't support non-module locations (components don't work atm).")
@@ -160,10 +159,11 @@ fn inject_instrumentation(wasm: &mut ModuleIterator, memory: &mut MemTracker) {
         let (
             Location::Module {
                 func_idx,
-                instr_idx: pc
+                instr_idx: pc,
             },
-            at_func_end
-        ) = wasm.curr_loc() else {
+            at_func_end,
+        ) = wasm.curr_loc()
+        else {
             panic!("non-module locations are not supported")
         };
         if first_func || curr_fid != func_idx {
@@ -226,7 +226,6 @@ fn inject_instrumentation(wasm: &mut ModuleIterator, memory: &mut MemTracker) {
             };
         }
 
-
         if wasm.next().is_none() {
             break;
         };
@@ -237,7 +236,7 @@ fn count_probe(fid: u32, pc: u32, wasm: &mut ModuleIterator, memory: &mut MemTra
     let mem = MemArg {
         align: 0,
         max_align: 0,
-        offset: SingleCountHeader::num_bytes() as u64,
+        offset: FuncLocHeader::num_bytes() as u64,
         memory: memory.mem_id,
     };
 
@@ -255,7 +254,6 @@ fn count_probe(fid: u32, pc: u32, wasm: &mut ModuleIterator, memory: &mut MemTra
 fn alloc_count(fid: u32, pc: u32, memory: &mut MemTracker) -> u32 {
     memory.alloc_count_var(fid, pc)
 }
-
 
 // State to encode the start and end opcode index of a basic block.
 // TODO: track whether ends are branched to using a control stack.

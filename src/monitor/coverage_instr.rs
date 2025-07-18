@@ -1,4 +1,4 @@
-use crate::monitor::{add_util_funcs, call_flush_on_exit, MemTracker, FuncLocHeader};
+use crate::monitor::{add_util_funcs, call_flush_on_exit, FuncLocHeader, MemTracker};
 use std::collections::HashMap;
 use wasmparser::MemArg;
 use wirm::ir::function::FunctionBuilder;
@@ -192,9 +192,7 @@ fn coverage_probe(fid: u32, pc: u32, wasm: &mut ModuleIterator, memory: &mut Mem
     let alloc_at = alloc_bool(fid, pc, memory);
 
     // Set the in-memory value to `true`
-    wasm.u32_const(alloc_at)
-        .i32_const(1)
-        .i32_store8(mem);
+    wasm.u32_const(alloc_at).i32_const(1).i32_store8(mem);
 }
 
 fn alloc_bool(fid: u32, pc: u32, memory: &mut MemTracker) -> u32 {

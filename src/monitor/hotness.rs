@@ -1,4 +1,4 @@
-use crate::monitor::{add_util_funcs, call_flush_on_exit, MemTracker, FuncLocHeader};
+use crate::monitor::{add_util_funcs, call_flush_on_exit, FuncLocHeader, MemTracker};
 use std::collections::HashMap;
 use wasmparser::MemArg;
 use wirm::ir::function::FunctionBuilder;

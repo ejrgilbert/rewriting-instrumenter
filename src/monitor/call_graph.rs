@@ -56,8 +56,9 @@ fn inject_instrumentation(
         };
         if let Some(op) = wasm.curr_op() {
             match op {
-                Operator::Call { function_index }
-                | Operator::ReturnCall { function_index } => call_probe(*curr_fid, *function_index, globals, maps, wasm),
+                Operator::Call { function_index } | Operator::ReturnCall { function_index } => {
+                    call_probe(*curr_fid, *function_index, globals, maps, wasm)
+                }
                 Operator::CallIndirect { .. }
                 | Operator::ReturnCallIndirect { .. }
                 | Operator::CallRef { .. }
@@ -72,52 +73,37 @@ fn inject_instrumentation(
     }
 }
 
-fn func_entry_probe(
-    fid: u32,
-    globals: &Globals,
-    maps: &Maps,
-    wasm: &mut ModuleIterator,
-) {
+fn func_entry_probe(fid: u32, globals: &Globals, maps: &Maps, wasm: &mut ModuleIterator) {
     wasm.func_entry();
 
     wasm
         // check if we're trying to collect a call target
         .global_get(globals.tracking_target)
         .if_stmt(BlockType::Empty)
-            // the map ID
-            .global_get(globals.call_graph)
-            // (caller, fid)
-            .global_get(globals.caller)
-            .u32_const(fid)
-
-            // get the current value
-            .global_get(globals.call_graph)
-            // (caller, fid)
-            .global_get(globals.caller)
-            .u32_const(fid)
-            .call(maps.get)
-
-            // increment the current value by 1
-            .u32_const(1)
-            .i32_add()
-
-            .call(maps.insert)
-
-            // unset the tracking bool
-            .i32_const(0)
-            .global_set(globals.tracking_target)
+        // the map ID
+        .global_get(globals.call_graph)
+        // (caller, fid)
+        .global_get(globals.caller)
+        .u32_const(fid)
+        // get the current value
+        .global_get(globals.call_graph)
+        // (caller, fid)
+        .global_get(globals.caller)
+        .u32_const(fid)
+        .call(maps.get)
+        // increment the current value by 1
+        .u32_const(1)
+        .i32_add()
+        .call(maps.insert)
+        // unset the tracking bool
+        .i32_const(0)
+        .global_set(globals.tracking_target)
         .end();
 
     wasm.finish_instr();
 }
 
-fn call_probe(
-    fid: u32,
-    target: u32,
-    globals: &Globals,
-    maps: &Maps,
-    wasm: &mut ModuleIterator
-) {
+fn call_probe(fid: u32, target: u32, globals: &Globals, maps: &Maps, wasm: &mut ModuleIterator) {
     wasm.before();
     wasm
         // the map ID
@@ -125,32 +111,24 @@ fn call_probe(
         // (caller, target)
         .u32_const(fid)
         .u32_const(target)
-
         // get the current value
         .global_get(globals.call_graph)
         // (caller, fid)
         .u32_const(fid)
         .u32_const(target)
         .call(maps.get)
-
         // increment the current value by 1
         .u32_const(1)
         .i32_add()
-
         .call(maps.insert);
 }
 
-fn call_indirect_probe(
-    fid: u32,
-    globals: &Globals,
-    wasm: &mut ModuleIterator
-) {
+fn call_indirect_probe(fid: u32, globals: &Globals, wasm: &mut ModuleIterator) {
     wasm.before();
     wasm
         // set the tracking bool
         .i32_const(1)
         .global_set(globals.tracking_target)
-
         .u32_const(fid)
         .global_set(globals.caller);
 }
@@ -182,7 +160,7 @@ impl Globals {
         Self {
             call_graph: add_global(wasm),
             tracking_target: add_global(wasm),
-            caller: add_global(wasm)
+            caller: add_global(wasm),
         }
     }
 }
