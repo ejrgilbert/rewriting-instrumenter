@@ -1,6 +1,9 @@
-use crate::monitor::{add_util_funcs, call_flush_on_exit, FuncLocHeader, MemTracker};
+#![allow(dead_code)] // for BasicBlockState::get_instr_cnt
+use crate::monitor::{
+    add_util_funcs, call_flush_on_exit, is_prog_exit_call, FuncLocHeader, MemTracker,
+};
 use std::collections::HashMap;
-use wasmparser::MemArg;
+use wasmparser::{MemArg, Operator};
 use wirm::ir::function::FunctionBuilder;
 use wirm::ir::id::FunctionID;
 use wirm::ir::types::BlockType;
@@ -144,19 +147,83 @@ fn emit_flush_fn(
 }
 
 fn inject_instrumentation(wasm: &mut ModuleIterator, memory: &mut MemTracker) {
+    let mut block_state = BasicBlockState::default();
+
+    let mut first_func: bool = true;
+    let mut curr_fid = if let Location::Module { func_idx, .. } = wasm.curr_loc().0 {
+        func_idx
+    } else {
+        panic!("we don't support non-module locations (components don't work atm).")
+    };
     loop {
         let (
             Location::Module {
                 func_idx,
-                instr_idx,
+                instr_idx: pc,
             },
-            end,
+            at_func_end,
         ) = wasm.curr_loc()
         else {
             panic!("non-module locations are not supported")
         };
-        if !end {
-            count_probe(*func_idx, instr_idx as u32, wasm, memory);
+        if first_func || curr_fid != func_idx {
+            // This is the first time we're visiting this new function
+            block_state.reset();
+            curr_fid = func_idx;
+            first_func = false;
+        }
+        // https://github.com/titzer/wizard-engine/blob/master/src/util/BasicBlockIterator.v3
+        if let Some(op) = wasm.curr_op() {
+            match op {
+                Operator::Loop {..} |
+                // TODO (for End): track whether ends are branched to using a control stack.
+                //       If this end has a branch to it, end the previous block, if there was one.
+                Operator::End => {
+                    if block_state.start != pc {
+                        block_state.end_block_here();
+                        if matches!(op, Operator::End) && !at_func_end {
+                            // semantics of End requires that this be injected AFTER it to execute!
+                            wasm.after();
+                        } else {
+                            wasm.before();
+                        }
+                        count_probe(*func_idx, pc as u32, wasm, memory);
+                    }
+                },
+
+                // Bytecodes that end the current block after this instruction.
+                Operator::If {..} |
+                Operator::Else |
+                Operator::Catch {..} |
+                Operator::CatchAll |
+                Operator::Throw {..} |
+                Operator::Rethrow {..} |
+                Operator::Return |
+                Operator::Unreachable |
+                Operator::Br {..} |
+                Operator::BrTable {..} |
+                Operator::BrIf {..} |
+                Operator::BrOnCast {..} |
+                Operator::BrOnCastFail {..} |
+                Operator::BrOnNull {..} |
+                Operator::BrOnNonNull {..} => {
+                    // End the current block after this instruction.
+                    block_state.continue_block();
+                    block_state.end_block_here();
+
+                    // exit | : before this instruction (to ensure it executes)
+                    wasm.before();
+                    count_probe(*func_idx, pc as u32, wasm, memory);
+                },
+                _ => {
+                    block_state.continue_block();
+                    if is_prog_exit_call(op, wasm.module) {
+                        // This is an exiting WASI function call, block exit!
+                        wasm.before();
+                        count_probe(*func_idx, pc as u32, wasm, memory);
+                    }
+                }
+            };
         }
 
         if wasm.next().is_none() {
@@ -166,8 +233,6 @@ fn inject_instrumentation(wasm: &mut ModuleIterator, memory: &mut MemTracker) {
 }
 
 fn count_probe(fid: u32, pc: u32, wasm: &mut ModuleIterator, memory: &mut MemTracker) {
-    wasm.before();
-
     let mem = MemArg {
         align: 0,
         max_align: 0,
@@ -188,4 +253,28 @@ fn count_probe(fid: u32, pc: u32, wasm: &mut ModuleIterator, memory: &mut MemTra
 
 fn alloc_count(fid: u32, pc: u32, memory: &mut MemTracker) -> u32 {
     memory.alloc_count_var(fid, pc)
+}
+
+// State to encode the start and end opcode index of a basic block.
+// TODO: track whether ends are branched to using a control stack.
+//       If this end has a branch to it, end the previous block, if there was one.
+#[derive(Default)]
+struct BasicBlockState {
+    start: usize,
+    end: usize,
+}
+impl BasicBlockState {
+    fn reset(&mut self) {
+        self.start = 0;
+        self.end = 0;
+    }
+    fn continue_block(&mut self) {
+        self.end += 1;
+    }
+    fn end_block_here(&mut self) {
+        self.start = self.end;
+    }
+    fn get_instr_cnt(&self) -> usize {
+        self.end - self.start
+    }
 }

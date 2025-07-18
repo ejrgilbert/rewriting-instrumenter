@@ -30,6 +30,7 @@ fn inject_instrumentation(
     globals: &Globals,
     maps: &Maps,
 ) {
+    let mut first_func: bool = true;
     let mut curr_fid = if let Location::Module { func_idx, .. } = wasm.curr_loc().0 {
         func_idx
     } else {
@@ -37,9 +38,10 @@ fn inject_instrumentation(
     };
     loop {
         if let Location::Module { func_idx, .. } = wasm.curr_loc().0 {
-            if curr_fid != func_idx {
+            if first_func || curr_fid != func_idx {
                 locals.reset_function();
                 curr_fid = func_idx;
+                first_func = false;
             }
         } else {
             panic!("we don't support non-module locations (components don't work atm).")

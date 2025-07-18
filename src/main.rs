@@ -24,6 +24,7 @@ fn main() -> Result<(), anyhow::Error> {
         "loop-tracer" => Monitor::LoopTracer,
         "call-graph" => Monitor::CallGraph,
         "coverage-instr" => Monitor::CoverageInstr,
+        "basic-blocks" => Monitor::BasicBlocks,
         name => bail!("Invalid monitor {}", name),
     };
 
