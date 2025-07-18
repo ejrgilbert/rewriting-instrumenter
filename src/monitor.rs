@@ -5,6 +5,7 @@ mod imix;
 mod mem_access;
 mod loop_tracer;
 mod call_graph;
+mod coverage_instr;
 
 use std::collections::{HashMap, HashSet};
 use std::io::Error;
@@ -30,7 +31,8 @@ pub enum Monitor {
     Hotness,
     MemAccess,
     LoopTracer,
-    CallGraph
+    CallGraph,
+    CoverageInstr
 }
 
 impl Monitor {
@@ -42,7 +44,8 @@ impl Monitor {
             Monitor::Hotness => "hotness",
             Monitor::MemAccess => "mem-access",
             Monitor::LoopTracer => "loop-tracer",
-            Monitor::CallGraph => "call-graph"
+            Monitor::CallGraph => "call-graph",
+            Monitor::CoverageInstr => "coverage-instr"
         }
     }
 }
@@ -57,7 +60,8 @@ pub fn add_monitor(module: Module, monitor: Monitor, path: &Path) -> Result<(), 
         Monitor::Hotness => hotness::instrument(module),
         Monitor::MemAccess => mem_access::instrument(module),
         Monitor::LoopTracer => loop_tracer::instrument(module),
-        Monitor::CallGraph => call_graph::instrument(module)
+        Monitor::CallGraph => call_graph::instrument(module),
+        Monitor::CoverageInstr => coverage_instr::instrument(module)
     };
 
     write_module(instrumented_module, monitor.name(), path)

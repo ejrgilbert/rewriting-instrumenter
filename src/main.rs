@@ -23,6 +23,7 @@ fn main() -> Result<(), anyhow::Error> {
         "mem-access" => Monitor::MemAccess,
         "loop-tracer" => Monitor::LoopTracer,
         "call-graph" => Monitor::CallGraph,
+        "coverage-instr" => Monitor::CoverageInstr,
         name => bail!("Invalid monitor {}", name),
     };
 
