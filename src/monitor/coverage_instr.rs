@@ -19,6 +19,8 @@ pub fn instrument(mut wasm: Module) -> Module {
             ", pc=".to_string(),
             ", [".to_string(),
             "]\n".to_string(),
+            "true".to_string(),
+            "false".to_string(),
             "\n".to_string(),
         ],
         &mut wasm,
@@ -71,6 +73,8 @@ fn emit_flush_fn(
     let (pc_addr, pc_len) = memory.get_str(", pc=");
     let (start_addr, start_len) = memory.get_str(", [");
     let (end_addr, end_len) = memory.get_str("]\n");
+    let (true_addr, true_len) = memory.get_str("true");
+    let (false_addr, false_len) = memory.get_str("false");
 
     // print "\n"
     flush
@@ -121,11 +125,21 @@ fn emit_flush_fn(
                 .call(puts)
 
                 .local_get(entry)
-                .i32_load(mem) // load the value
-                .call(puti)
+                .i32_load8_u(mem) // load the value
+                .if_stmt(BlockType::Empty)
+                    // if true, print 'true'
+                    .u32_const(true_addr)
+                    .u32_const(true_len as u32)
+                    .call(puts)
+                .else_stmt()
+                    // if false, print 'false'
+                    .u32_const(false_addr)
+                    .u32_const(false_len as u32)
+                    .call(puts)
+                .end()
 
                 .local_get(entry)
-                .i32_const(8)
+                .i32_const(1)
                 .i32_add()
                 .local_set(entry)
 
@@ -156,7 +170,7 @@ fn inject_instrumentation(wasm: &mut ModuleIterator, memory: &mut MemTracker) {
             panic!("non-module locations are not supported")
         };
         if !end {
-            count_probe(*func_idx, instr_idx as u32, wasm, memory);
+            coverage_probe(*func_idx, instr_idx as u32, wasm, memory);
         }
 
         if wasm.next().is_none() {
@@ -165,7 +179,7 @@ fn inject_instrumentation(wasm: &mut ModuleIterator, memory: &mut MemTracker) {
     }
 }
 
-fn count_probe(fid: u32, pc: u32, wasm: &mut ModuleIterator, memory: &mut MemTracker) {
+fn coverage_probe(fid: u32, pc: u32, wasm: &mut ModuleIterator, memory: &mut MemTracker) {
     wasm.before();
 
     let mem = MemArg {
@@ -175,17 +189,14 @@ fn count_probe(fid: u32, pc: u32, wasm: &mut ModuleIterator, memory: &mut MemTra
         memory: memory.mem_id,
     };
 
-    let alloc_at = alloc_count(fid, pc, memory);
+    let alloc_at = alloc_bool(fid, pc, memory);
 
-    // Increment the in-memory value now that we have the offset
+    // Set the in-memory value to `true`
     wasm.u32_const(alloc_at)
-        .u32_const(alloc_at)
-        .i64_load(mem)
-        .i64_const(1)
-        .i64_add()
-        .i64_store(mem);
+        .i32_const(1)
+        .i32_store8(mem);
 }
 
-fn alloc_count(fid: u32, pc: u32, memory: &mut MemTracker) -> u32 {
-    memory.alloc_count_var(fid, pc)
+fn alloc_bool(fid: u32, pc: u32, memory: &mut MemTracker) -> u32 {
+    memory.alloc_i8_var(fid, pc)
 }

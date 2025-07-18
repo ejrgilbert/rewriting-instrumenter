@@ -5,6 +5,7 @@ mod imix;
 mod mem_access;
 mod loop_tracer;
 mod call_graph;
+mod coverage_instr;
 
 use std::collections::{HashMap, HashSet};
 use std::io::Error;
@@ -30,7 +31,8 @@ pub enum Monitor {
     Hotness,
     MemAccess,
     LoopTracer,
-    CallGraph
+    CallGraph,
+    CoverageInstr
 }
 
 impl Monitor {
@@ -42,7 +44,8 @@ impl Monitor {
             Monitor::Hotness => "hotness",
             Monitor::MemAccess => "mem-access",
             Monitor::LoopTracer => "loop-tracer",
-            Monitor::CallGraph => "call-graph"
+            Monitor::CallGraph => "call-graph",
+            Monitor::CoverageInstr => "coverage-instr"
         }
     }
 }
@@ -57,7 +60,8 @@ pub fn add_monitor(module: Module, monitor: Monitor, path: &Path) -> Result<(), 
         Monitor::Hotness => hotness::instrument(module),
         Monitor::MemAccess => mem_access::instrument(module),
         Monitor::LoopTracer => loop_tracer::instrument(module),
-        Monitor::CallGraph => call_graph::instrument(module)
+        Monitor::CallGraph => call_graph::instrument(module),
+        Monitor::CoverageInstr => coverage_instr::instrument(module)
     };
 
     write_module(instrumented_module, monitor.name(), path)
@@ -201,7 +205,7 @@ impl MemTracker {
     pub fn alloc_count_var(&mut self, fid: u32, pc: u32) -> u32 {
         let mem_offset = self.curr_mem_offset;
         let allocated_var = AllocatedVar::SingleCount {
-            header: SingleCountHeader { fid, pc },
+            header: FuncLocHeader { fid, pc },
         };
 
         let len = allocated_var.num_bytes() as u32;
@@ -212,6 +216,17 @@ impl MemTracker {
     pub fn alloc_i32_var(&mut self) -> u32 {
         let mem_offset = self.curr_mem_offset;
         let allocated_var = AllocatedVar::SingleI32;
+
+        let len = allocated_var.num_bytes() as u32;
+        self.allocated_vars.push(allocated_var);
+        self.curr_mem_offset += len;
+        mem_offset
+    }
+    pub fn alloc_i8_var(&mut self, fid: u32, pc: u32) -> u32 {
+        let mem_offset = self.curr_mem_offset;
+        let allocated_var = AllocatedVar::ReportI8 {
+            header: FuncLocHeader { fid, pc },
+        };
 
         let len = allocated_var.num_bytes() as u32;
         self.allocated_vars.push(allocated_var);
@@ -229,11 +244,11 @@ impl MemTracker {
     }
 }
 
-struct SingleCountHeader {
+struct FuncLocHeader {
     fid: u32,
     pc: u32,
 }
-impl SingleCountHeader {
+impl FuncLocHeader {
     fn num_bytes() -> usize {
         // 0      4      8
         // | fid  |  pc  |
@@ -278,9 +293,12 @@ enum AllocatedVar {
     // 0      4
     // | i32  |
     SingleI32,
+    // 0      4      8     9
+    // | fid  |  pc  | val |
+    ReportI8 { header: FuncLocHeader },
     // 0      4      8      16
     // | fid  |  pc  | count |
-    SingleCount { header: SingleCountHeader },
+    SingleCount { header: FuncLocHeader },
     // 0      4      8      12        20
     // | fid  |  pc  |   n  |  0 taken |   ...  | n taken |
     MultiCount { header: MultiCountHeader },
@@ -290,6 +308,14 @@ impl AllocatedVar {
         match self {
             Self::SingleI32 => {
                 let res = 0_i32.to_le_bytes().to_vec();
+                assert_eq!(self.num_bytes(), res.len());
+
+                res
+            }
+            Self::ReportI8 { header } => {
+                let mut res = header.encode();
+                // zero padding for single value slot
+                res.extend(0_i8.to_le_bytes());
                 assert_eq!(self.num_bytes(), res.len());
 
                 res
@@ -317,6 +343,7 @@ impl AllocatedVar {
     fn num_bytes(&self) -> usize {
         match self {
             AllocatedVar::SingleI32 => size_of::<i32>(),
+            AllocatedVar::ReportI8 { .. } => self.full_header_size() + size_of::<u8>(),
             AllocatedVar::SingleCount { .. } => self.full_header_size() + size_of::<u64>(),
             AllocatedVar::MultiCount {
                 header: MultiCountHeader { n, .. },
@@ -326,7 +353,8 @@ impl AllocatedVar {
     pub fn full_header_size(&self) -> usize {
         match self {
             AllocatedVar::SingleI32 => 0,
-            AllocatedVar::SingleCount { .. } => SingleCountHeader::num_bytes(),
+            AllocatedVar::ReportI8 { .. } => FuncLocHeader::num_bytes(),
+            AllocatedVar::SingleCount { .. } => FuncLocHeader::num_bytes(),
             AllocatedVar::MultiCount { .. } => MultiCountHeader::num_bytes(),
         }
     }
