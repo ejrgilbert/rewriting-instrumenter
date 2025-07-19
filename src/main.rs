@@ -18,7 +18,7 @@ fn main() -> Result<(), anyhow::Error> {
     let monitor: Monitor = match &args[0][..] {
         "branches" => Monitor::Branch,
         "hotness" => Monitor::Hotness,
-        // "icount" => Monitor::ICount,
+        "icount" => Monitor::ICount,
         "imix" => Monitor::IMix,
         "cache-sim" => Monitor::Cache,
         "mem-access" => Monitor::MemAccess,
