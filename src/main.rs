@@ -16,15 +16,16 @@ fn main() -> Result<(), anyhow::Error> {
     }
 
     let monitor: Monitor = match &args[0][..] {
-        "imix" => Monitor::IMix,
-        "cache-sim" => Monitor::Cache,
         "branches" => Monitor::Branch,
         "hotness" => Monitor::Hotness,
+        // "icount" => Monitor::ICount,
+        "imix" => Monitor::IMix,
+        "cache-sim" => Monitor::Cache,
         "mem-access" => Monitor::MemAccess,
         "loop-tracer" => Monitor::LoopTracer,
-        "call-graph" => Monitor::CallGraph,
-        "coverage-instr" => Monitor::CoverageInstr,
         "basic-blocks" => Monitor::BasicBlocks,
+        "call-graph" => Monitor::CallGraph,
+        "instr-coverage" => Monitor::CoverageInstr,
         name => bail!("Invalid monitor {}", name),
     };
 
