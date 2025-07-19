@@ -5,6 +5,7 @@ mod call_graph;
 mod coverage_instr;
 mod hotness;
 mod imix;
+mod icount;
 mod loop_tracer;
 mod mem_access;
 
@@ -26,6 +27,7 @@ use wirm::{DataSegment, DataSegmentKind, DataType, InitInstr, Module, Opcode};
 pub const WASM_PAGE_SIZE: u32 = 65_536;
 
 pub enum Monitor {
+    ICount,
     IMix,
     Cache,
     Branch,
@@ -40,6 +42,7 @@ pub enum Monitor {
 impl Monitor {
     fn name(&self) -> &str {
         match self {
+            Monitor::ICount => "icount",
             Monitor::IMix => "imix",
             Monitor::Cache => "cache-sim",
             Monitor::Branch => "branches",
@@ -57,6 +60,7 @@ impl Monitor {
 /// WASM module.
 pub fn add_monitor(module: Module, monitor: Monitor, path: &Path) -> Result<(), Error> {
     let instrumented_module = match monitor {
+        Monitor::ICount => icount::instrument(module),
         Monitor::IMix => imix::instrument(module),
         Monitor::Cache => cache::instrument(module),
         Monitor::Branch => branch::instrument(module),
