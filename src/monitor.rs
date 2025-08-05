@@ -50,7 +50,7 @@ impl Monitor {
             Monitor::MemAccess => "mem-access",
             Monitor::LoopTracer => "loop-tracer",
             Monitor::CallGraph => "call-graph",
-            Monitor::CoverageInstr => "coverage-instr",
+            Monitor::CoverageInstr => "instr-coverage",
             Monitor::BasicBlocks => "basic-blocks",
         }
     }
